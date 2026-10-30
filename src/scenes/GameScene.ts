@@ -169,13 +169,45 @@ export class GameScene extends Phaser.Scene {
     );
 
     this.enemyGroup = this.physics.add.group();
+
+    // Colisão do Jogador com o Cenário:
+    // - Pokémons de Água (Squirtle/Wartortle/Blastoise) podem entrar nos lagos e nadar!
+    // - Pokémons Voadores (Charizard) podem voar livremente sobre lagos e casas!
+    // - Demais tipos de Pokémon são rigorosamente bloqueados por lagos e casas!
     this.physics.add.collider(
       this.player.sprite,
-      this.mapManager.getObstaclesGroup()
+      this.mapManager.getObstaclesGroup(),
+      undefined,
+      (_playerObj, zoneObj) => {
+        const type = (zoneObj as Phaser.GameObjects.Zone).getData('obstacleType');
+        if (type === 'water') {
+          if (this.player.canSwim() || this.player.canFly()) return false;
+          return true;
+        }
+        if (type === 'building') {
+          if (this.player.canFly()) return false;
+          return true;
+        }
+        return true;
+      }
     );
+
+    // Colisão dos Inimigos com o Cenário:
+    // - Inimigos Voadores (Zubat) podem passar sobre lagos e casas!
+    // - Inimigos Terrestres (Rattata, Onix) são bloqueados por lagos e casas!
     this.physics.add.collider(
       this.enemyGroup,
-      this.mapManager.getObstaclesGroup()
+      this.mapManager.getObstaclesGroup(),
+      undefined,
+      (enemySpriteObj, zoneObj) => {
+        const enemy = (enemySpriteObj as any).enemyRef as Enemy;
+        const isFlying = enemy ? enemy.canFly() : false;
+        const type = (zoneObj as Phaser.GameObjects.Zone).getData('obstacleType');
+        if (isFlying) {
+          if (type === 'water' || type === 'building') return false;
+        }
+        return true;
+      }
     );
     this.physics.add.collider(this.enemyGroup, this.enemyGroup);
 
@@ -212,8 +244,14 @@ export class GameScene extends Phaser.Scene {
       );
     }
 
-    const px = this.player.sprite.x;
+        const px = this.player.sprite.x;
     const py = this.player.sprite.y;
+
+    // Atualiza estado de nado exclusivo para Pokémons aquáticos
+    if (this.player.canSwim()) {
+      const inWater = this.mapManager.isWaterAt(px, py);
+      this.player.setSwimming(inWater);
+    }
 
     // 1. Tempo do mapa e transição conectada com pontezinha
     if (!this.mapManager.isBossMapActive()) {
@@ -235,22 +273,45 @@ export class GameScene extends Phaser.Scene {
       this.compassText.setVisible(false);
     }
 
-    // 2. Spawner de inimigos
+    // 2. Spawner de inimigos intensificado com ondas dinâmicas
     this.spawnTimerMs += delta;
     const isBossActive = Boolean(this.bossEnemy && !this.bossEnemy.isDead);
     const maxEnemies = isBossActive
-      ? 5
-      : Math.min(26, 16 + Math.floor(this.runTimeSeconds / 30) * 2);
-    const spawnInterval = isBossActive ? 5200 : 2000;
+      ? 8
+      : Math.min(55, 30 + Math.floor(this.runTimeSeconds / 20) * 3);
+    const spawnInterval = isBossActive
+      ? 3800
+      : Math.max(750, 1600 - Math.floor(this.runTimeSeconds / 15) * 80);
 
     if (this.spawnTimerMs >= spawnInterval && this.enemies.length < maxEnemies) {
       this.spawnTimerMs = 0;
-      this.spawnWildPokemon();
+      const countToSpawn = Math.min(
+        maxEnemies - this.enemies.length,
+        1 + Math.floor(this.runTimeSeconds / 45)
+      );
+      for (let s = 0; s < countToSpawn; s++) {
+        this.spawnWildPokemon();
+      }
     }
 
-    // 3. Atualiza inimigos e verifica dano de contato (acionando passivas inatas de contato!)
+    // 3. Atualiza inimigos, despawn por distância e verificação de dano de contato
     this.enemies = this.enemies.filter((enemy) => {
       if (enemy.isDead) return false;
+
+      const distToPlayer = Phaser.Math.Distance.Between(
+        px,
+        py,
+        enemy.sprite.x,
+        enemy.sprite.y
+      );
+
+      // Despawn por distância: caso o jogador se distancie demais (>640px), o inimigo some e novos aparecem perto
+      const DESPAWN_DISTANCE = 640;
+      if (!enemy.isBoss && distToPlayer > DESPAWN_DISTANCE) {
+        enemy.destroy();
+        this.spawnWildPokemon();
+        return false;
+      }
 
       enemy.update(
         delta,
@@ -273,13 +334,8 @@ export class GameScene extends Phaser.Scene {
         }
       );
 
-      if (!enemy.isDead && !enemy.isIncapacitated()) {
-        const distToPlayer = Phaser.Math.Distance.Between(
-          px,
-          py,
-          enemy.sprite.x,
-          enemy.sprite.y
-        );
+      // Inimigos dormindo ou incapacitados NÃO causam dano de contato!
+      if (!enemy.isDead && !enemy.isIncapacitated() && !enemy.isSleeping()) {
         if (distToPlayer <= enemy.getContactRadius()) {
           const contactDmg = enemy.isBoss
             ? 22
@@ -338,7 +394,7 @@ export class GameScene extends Phaser.Scene {
       gfx: orbGfx,
       x,
       y,
-      xpAmount: isGolden ? 48 : 16,
+      xpAmount: isGolden ? 28 : 10,
       isGolden,
       ageMs: 0,
     });

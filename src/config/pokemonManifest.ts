@@ -258,9 +258,20 @@ export interface PokemonDefinition {
   baseHp: number;
   speed: number;
   scale: number;
+  canFly?: boolean;
+  canSwim?: boolean;
   innatePassive?: PokemonInnatePassive;
   attackProfile?: PokemonAttackProfile;
   anims: Record<PokemonAnimType, PokemonAnimConfig>;
+}
+
+
+export function isPokemonWater(def: PokemonDefinition): boolean {
+  return def.canSwim === true || def.attackProfile?.element === 'agua';
+}
+
+export function isPokemonFlying(def: PokemonDefinition): boolean {
+  return def.canFly === true || def.id === '0006' || def.id === '0041';
 }
 
 export interface MapDefinition {
@@ -576,6 +587,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   },
   '0006': {
     id: '0006',
+    canFly: true,
     name: 'Charizard',
     role: 'evolution',
     classId: 'lutador',
@@ -793,6 +805,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   // === LINHA SQUIRTLE -> WARTORTLE -> BLASTOISE (TANK) ===
   '0007': {
     id: '0007',
+    canSwim: true,
     name: 'Squirtle',
     role: 'starter',
     classId: 'tank',
@@ -848,6 +861,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   },
   '0008': {
     id: '0008',
+    canSwim: true,
     name: 'Wartortle',
     role: 'evolution',
     classId: 'tank',
@@ -902,6 +916,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   },
   '0009': {
     id: '0009',
+    canSwim: true,
     name: 'Blastoise',
     role: 'evolution',
     classId: 'tank',
@@ -1096,6 +1111,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   },
   '0041': {
     id: '0041',
+    canFly: true,
     name: 'Zubat',
     role: 'enemy',
     baseHp: 26,

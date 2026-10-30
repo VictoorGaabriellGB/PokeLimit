@@ -35,6 +35,7 @@ export class Enemy {
   private activeStatusTint: number | null = null;
   private bossSkillTimerMs = 0;
   private sleepIcon: Phaser.GameObjects.Text | null = null;
+  private sleepTimerMs = 0;
 
   constructor(
     scene: Phaser.Scene,
@@ -67,6 +68,8 @@ export class Enemy {
       .setDepth(depthForY(y));
 
     this.sprite.setCollideWorldBounds(true);
+    (this.sprite as any).enemyRef = this;
+    this.sprite.setData('enemy', this);
     this.syncHitbox();
     this.playAnim(true);
   }
@@ -79,8 +82,44 @@ export class Enemy {
     return this.isBoss ? 38 : 20;
   }
 
+    canFly(): boolean {
+    return this.pokemonDef.canFly === true || this.pokemonDef.id === '0041';
+  }
+
+  isSleeping(): boolean {
+    return this.sleepTimerMs > 0;
+  }
+
+  applySleep(durationMs = 3000): void {
+    if (this.isDead) return;
+    const dur = this.isBoss ? Math.round(durationMs * 0.67) : durationMs;
+    this.sleepTimerMs = Math.max(this.sleepTimerMs, dur);
+    this.sprite.setVelocity(0, 0);
+    this.currentState = 'Idle';
+    this.playAnim(false);
+
+    if (this.sprite.active) {
+      this.sprite.setTint(0xc084fc);
+    }
+
+    if (!this.sleepIcon) {
+      this.sleepIcon = this.scene.add
+        .text(
+          this.sprite.x + 8,
+          this.sprite.y - (this.isBoss ? 52 : 26),
+          '💤',
+          {
+            fontFamily: 'monospace',
+            fontSize: '15px',
+          }
+        )
+        .setOrigin(0.5)
+        .setDepth(DEPTH.FLOATING_TEXT);
+    }
+  }
+
   isIncapacitated(): boolean {
-    return this.slowTimerMs > 0 && this.slowFactor < 0.05;
+    return this.isSleeping() || (this.slowTimerMs > 0 && this.slowFactor < 0.05);
   }
 
   hasSlowOrParalysis(): boolean {
@@ -95,6 +134,46 @@ export class Enemy {
     onBossHazardHitPlayer?: (damage: number) => void
   ): void {
     if (this.isDead) return;
+
+    if (this.sleepTimerMs > 0) {
+      this.sleepTimerMs -= delta;
+      this.sprite.setVelocity(0, 0);
+      this.currentState = 'Idle';
+      this.playAnim(false);
+
+      if (!this.sleepIcon) {
+        this.sleepIcon = this.scene.add
+          .text(
+            this.sprite.x + 8,
+            this.sprite.y - (this.isBoss ? 52 : 26),
+            '💤',
+            {
+              fontFamily: 'monospace',
+              fontSize: '15px',
+            }
+          )
+          .setOrigin(0.5)
+          .setDepth(DEPTH.FLOATING_TEXT);
+      }
+      const bob = Math.sin(this.scene.time.now / 180) * 3;
+      this.sleepIcon.setPosition(
+        this.sprite.x + 8,
+        this.sprite.y - (this.isBoss ? 52 : 26) + bob
+      );
+
+      if (this.sleepTimerMs <= 0) {
+        this.clearSleepIcon();
+        if (this.sprite.active) {
+          if (this.activeStatusTint !== null) {
+            this.sprite.setTint(this.activeStatusTint);
+          } else {
+            this.sprite.clearTint();
+          }
+        }
+      }
+      this.syncShadowAndDepth();
+      return;
+    }
 
     if (this.slowTimerMs > 0) {
       this.slowTimerMs -= delta;

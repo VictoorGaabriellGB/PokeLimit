@@ -93,6 +93,9 @@ export class Player {
   private hpBarFill: Phaser.GameObjects.Rectangle;
   private shieldBubbleGfx: Phaser.GameObjects.Arc;
   private wishBubbleGfx: Phaser.GameObjects.Arc;
+  private swimRippleGfx: Phaser.GameObjects.Graphics;
+  private swimFoamTimer = 0;
+  public isSwimming = false;
   private scene: Phaser.Scene;
 
   private pokemonDef: PokemonDefinition;
@@ -104,7 +107,7 @@ export class Player {
 
   public level = 1;
   public xp = 0;
-  public xpToNextLevel = 30;
+  public xpToNextLevel = 50;
 
   public maxHp: number;
   public hp: number;
@@ -198,6 +201,7 @@ export class Player {
       .setDepth(DEPTH.EFFECTS)
       .setVisible(false);
 
+    this.swimRippleGfx = scene.add.graphics().setDepth(DEPTH.SHADOW + 1);
     this.wishBubbleGfx = scene.add
       .circle(x, y, 25, 0xf472b6, 0.15)
       .setStrokeStyle(2, 0xfbcfe8, 0.9)
@@ -307,6 +311,26 @@ export class Player {
       850,
       DASH_COOLDOWN_MS - this.getAbilityLevel('quick_charge') * 220
     );
+  }
+
+    canSwim(): boolean {
+    return this.pokemonDef.canSwim === true || this.profile.element === 'agua';
+  }
+
+  canFly(): boolean {
+    return this.pokemonDef.canFly === true || this.pokemonDef.id === '0006';
+  }
+
+  setSwimming(val: boolean): void {
+    if (this.isSwimming === val) return;
+    this.isSwimming = val;
+    if (!val) {
+      this.swimRippleGfx.clear();
+      this.shadow.setAlpha(0.3);
+    } else {
+      this.shadow.setAlpha(0.08);
+      this.spawnWaterSplash(this.sprite.x, this.sprite.y + 6, 0.45);
+    }
   }
 
   isSpecialReady(): boolean {
@@ -443,7 +467,7 @@ export class Player {
     while (this.xp >= this.xpToNextLevel) {
       this.xp -= this.xpToNextLevel;
       this.level++;
-      this.xpToNextLevel = Math.round(this.xpToNextLevel * 1.28);
+      this.xpToNextLevel = Math.round(this.xpToNextLevel * 1.35);
       levelsGained++;
 
       const evoId = this.pokemonDef.evolvesToId;
@@ -733,7 +757,53 @@ export class Player {
     this.updateOrbitals(delta);
     this.updateFieldHazards(delta);
 
-    this.shadow.setPosition(this.sprite.x, this.sprite.y + 11);
+    if (this.isSwimming) {
+      // Animação de nado: ondulações suaves na água e flutuação
+      const swimBob = Math.sin(this.scene.time.now / 150) * 2;
+      this.sprite.y += swimBob;
+
+      this.swimRippleGfx.clear();
+      const t = this.scene.time.now;
+      const p1 = (t % 850) / 850;
+      const p2 = ((t + 425) % 850) / 850;
+      const px = this.sprite.x;
+      const py = this.sprite.y + 8;
+
+      this.swimRippleGfx.lineStyle(2.5, 0xe0f2fe, (1 - p1) * 0.75);
+      this.swimRippleGfx.strokeEllipse(px, py, 22 + p1 * 26, 11 + p1 * 13);
+      this.swimRippleGfx.lineStyle(2, 0x38bdf8, (1 - p2) * 0.55);
+      this.swimRippleGfx.strokeEllipse(px, py, 22 + p2 * 26, 11 + p2 * 13);
+
+      if (isMoving) {
+        this.swimFoamTimer += delta;
+        if (this.swimFoamTimer >= 90) {
+          this.swimFoamTimer = 0;
+          const foam = this.scene.add
+            .circle(px - vx * 12 + Phaser.Math.Between(-4, 4), py + Phaser.Math.Between(-2, 2), Phaser.Math.Between(3, 5), 0xffffff, 0.8)
+            .setDepth(DEPTH.SHADOW + 2);
+          this.scene.tweens.add({
+            targets: foam,
+            scale: 1.8,
+            alpha: 0,
+            duration: 260,
+            onComplete: () => foam.destroy(),
+          });
+        }
+      }
+      this.shadow.setAlpha(0.08);
+    } else if (this.canFly()) {
+      // Pokémons voadores (Charizard): pairam acima do chão com sombra no solo
+      const flyBob = Math.sin(this.scene.time.now / 140) * 3;
+      this.sprite.y -= (8 + flyBob);
+      this.shadow.setPosition(this.sprite.x, this.sprite.y + 16 + flyBob);
+      this.shadow.setAlpha(0.2);
+      this.swimRippleGfx.clear();
+    } else {
+      this.shadow.setPosition(this.sprite.x, this.sprite.y + 11);
+      this.shadow.setAlpha(0.3);
+      this.swimRippleGfx.clear();
+    }
+
     this.shieldBubbleGfx.setPosition(this.sprite.x, this.sprite.y);
     this.shieldBubbleGfx.setVisible(this.shieldHp > 0);
     this.wishBubbleGfx.setPosition(this.sprite.x, this.sprite.y);
@@ -1847,7 +1917,7 @@ export class Player {
     ) {
       const fx = this.scene.add
         .sprite(x, y, 'sheet-attack-eletric', 2)
-        .setScale(0.55)
+        .setScale(0.36)
         .setRotation(Math.random() * Math.PI * 2)
         .setDepth(DEPTH.EFFECTS + 1);
       fx.play('anim-attack-eletric-hit');
@@ -1865,7 +1935,7 @@ export class Player {
     });
   }
 
-  private spawnWaterSplash(x: number, y: number, scale = 0.72): void {
+  private spawnWaterSplash(x: number, y: number, scale = 0.42): void {
     if (
       this.scene.textures.exists('sheet-attack-water-hit') &&
       this.scene.anims.exists('anim-attack-water-hit')
@@ -1907,9 +1977,9 @@ export class Player {
         angle,
         speed: 495,
         range: p.range * this.rangeMult,
-        hitRadius: 28,
+        hitRadius: 18,
         pierce,
-        scale: 0.68,
+        scale: 0.32,
         sheetKey: 'sheet-attack-eletric',
         animKey: 'anim-attack-eletric',
         trailColor: 0xfef08a,
@@ -1953,7 +2023,7 @@ export class Player {
       if (hasAnim) {
         const flameSpr = this.scene.add
           .sprite(fx, fy, 'sheet-attack-fire', 1)
-          .setScale(0.68)
+          .setScale(0.34)
           .setRotation(a) // Ponta da chama aponta diretamente no ângulo 'a'!
           .setDepth(DEPTH.EFFECTS);
         flameSpr.play('anim-attack-fire-slash');
@@ -1961,7 +2031,7 @@ export class Player {
           targets: flameSpr,
           x: this.sprite.x + Math.cos(a) * range * 0.85,
           y: this.sprite.y + Math.sin(a) * range * 0.85,
-          scale: 0.92,
+          scale: 0.44,
           alpha: 0,
           duration: 280,
           onComplete: () => flameSpr.destroy(),
@@ -2033,9 +2103,9 @@ export class Player {
         angle,
         speed: 390,
         range: p.range * this.rangeMult,
-        hitRadius: 26,
+        hitRadius: 16,
         pierce,
-        scale: 0.64,
+        scale: 0.28,
         sheetKey: 'sheet-attack-grass',
         animKey: 'anim-attack-grass',
         trailColor: 0x86efac,
@@ -2232,7 +2302,7 @@ export class Player {
       case 'melee_flame':
         return this.specialFlameNova(aim, base);
       case 'control_leaf':
-        return this.specialSolarBeam(aim, base);
+        return this.specialSleepPowder(aim, base);
       case 'wave_water':
         return this.specialHydroVortex(aim, base);
       case 'support_song':
@@ -2251,7 +2321,7 @@ export class Player {
     ) {
       const shield = this.scene.add
         .sprite(px, py, 'sheet-especial-eletrico', 0)
-        .setScale(0.92)
+        .setScale(0.58)
         .setDepth(DEPTH.EFFECTS + 2);
       shield.play('anim-especial-eletrico');
       shield.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () =>
@@ -2282,13 +2352,43 @@ export class Player {
         cx = x + Phaser.Math.Between(-18, 18);
         g.lineTo(cx, Math.min(cy, y));
       }
-      g.strokePath();
-      this.spawnElectricImpact(x, y, 54);
+            g.strokePath();
+      this.spawnElectricImpact(x, y, 42);
       this.scene.tweens.add({
         targets: g,
         alpha: 0,
         duration: 260,
         onComplete: () => g.destroy(),
+      });
+
+      // Poça de choque residual no chão que causa dano e lentidão a quem passar
+      const puddle = this.scene.add
+        .circle(x, y, 36, 0xb89b00, 0.38)
+        .setStrokeStyle(2.5, 0xfef08a, 0.85)
+        .setDepth(DEPTH.SHADOW + 1);
+      
+      const puddleTimer = this.scene.time.addEvent({
+        delay: 240,
+        repeat: 7,
+        callback: () => {
+          if (!puddle.active) return;
+          for (const e of this.enemiesProvider()) {
+            if (e.isDead) continue;
+            if (Phaser.Math.Distance.Between(x, y, e.sprite.x, e.sprite.y) <= 38) {
+              this.dealDamage(e, base * 0.3, { secondary: true, skipBasicProc: true });
+              e.applyStatusEffect({ slowFactor: 0.4, slowDurationMs: 600, tintColor: 0xfef08a, statusIcon: '⚡' });
+            }
+          }
+        }
+      });
+      this.scene.tweens.add({
+        targets: puddle,
+        alpha: 0,
+        duration: 2000,
+        onComplete: () => {
+          puddleTimer.remove();
+          puddle.destroy();
+        }
       });
     };
 
@@ -2336,7 +2436,7 @@ export class Player {
       const flameStream = this.scene.add
         .sprite(nozzleX, nozzleY, 'sheet-especial-fogo', 0)
         .setOrigin(0.045, 0.5) // Ancora no bico esquerdo para disparar exatamente na direção 'aim'
-        .setScale(0.95 * this.rangeMult)
+        .setScale(0.58 * this.rangeMult)
         .setRotation(aim)
         .setDepth(DEPTH.EFFECTS + 2);
       flameStream.play('anim-especial-fogo');
@@ -2356,13 +2456,16 @@ export class Player {
       if (d > range) continue;
       const angTo = Math.atan2(e.sprite.y - py, e.sprite.x - px);
       if (Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= 0.62 || d < 32) {
-        this.dealDamage(e, base * 2.35, {
+                this.dealDamage(e, base * 2.35, {
           special: true,
           knockback: 330,
           fromX: px,
           fromY: py,
           skipBasicProc: true,
         });
+        if (e.isDead) {
+          this.spawnFireExplosion(e.sprite.x, e.sprite.y, base * 1.5);
+        }
         e.applyStatusEffect({
           dotDamagePerSec: 11 * burnMult,
           dotDurationMs: 3800,
@@ -2373,110 +2476,132 @@ export class Player {
     }
   }
 
-  /** ULT Planta: Raio Solar Tóxico — Envenenamento Tóxico 100% garantido! */
-  private specialSolarBeam(aim: number, base: number): void {
-    const length = 480 * this.rangeMult;
-    const halfWidth = 30;
-    const sx = this.sprite.x;
-    const sy = this.sprite.y;
-    const ex = sx + Math.cos(aim) * length;
-    const ey = sy + Math.sin(aim) * length;
-
-    const charge = this.scene.add
-      .circle(sx, sy, 12, 0xfef08a, 0.85)
-      .setStrokeStyle(3, 0x4ade80, 1)
-      .setDepth(DEPTH.EFFECTS);
+    private spawnFireExplosion(x: number, y: number, damage: number): void {
+    const blast = this.scene.add
+      .circle(x, y, 75, 0xff7a1a, 0.55)
+      .setStrokeStyle(3.5, 0xffd24a, 1)
+      .setDepth(DEPTH.EFFECTS + 2)
+      .setScale(0.2);
     this.scene.tweens.add({
-      targets: charge,
-      radius: 36,
-      duration: 190,
-      yoyo: true,
-      onComplete: () => charge.destroy(),
+      targets: blast,
+      scale: 1,
+      alpha: 0,
+      duration: 360,
+      onComplete: () => blast.destroy(),
     });
-
-    this.scene.time.delayedCall(190, () => {
-      if (this.isDead) return;
-      const beam = this.scene.add.graphics().setDepth(DEPTH.EFFECTS + 1);
-      beam.lineStyle(halfWidth * 2, 0xa855f7, 0.28);
-      beam.lineBetween(sx, sy, ex, ey);
-      beam.lineStyle(halfWidth * 1.25, 0x4ade80, 0.88);
-      beam.lineBetween(sx, sy, ex, ey);
-      beam.lineStyle(10, 0xfef08a, 1);
-      beam.lineBetween(sx, sy, ex, ey);
-
-      // Folhas e esporos viajando na direção do feixe (+aim)
-      if (this.scene.textures.exists('sheet-attack-grass')) {
-        for (let step = 70; step < length; step += 90) {
-          const lx = sx + Math.cos(aim) * step;
-          const ly = sy + Math.sin(aim) * step;
-          const leafFx = this.scene.add
-            .sprite(lx, ly, 'sheet-attack-grass', 5)
-            .setScale(0.6)
-            .setRotation(aim)
-            .setDepth(DEPTH.EFFECTS + 2);
-          this.scene.tweens.add({
-            targets: leafFx,
-            x: lx + Math.cos(aim) * 55,
-            y: ly + Math.sin(aim) * 55,
-            alpha: 0,
-            duration: 360,
-            onComplete: () => leafFx.destroy(),
-          });
-        }
+    for (const e of this.enemiesProvider()) {
+      if (e.isDead) continue;
+      if (Phaser.Math.Distance.Between(x, y, e.sprite.x, e.sprite.y) <= 75) {
+        this.dealDamage(e, damage, { special: true, secondary: true, skipBasicProc: true });
+        e.applyStatusEffect({ dotDamagePerSec: 10, dotDurationMs: 2500, tintColor: 0xff7b00, statusIcon: '🔥' });
       }
+    }
+  }
 
+  /** ULT Planta (Bulbasaur/Ivysaur/Venusaur): Pó do Sono Supremo — Coloca pokémons para dormir por 3 segundos! */
+  private specialSleepPowder(aim: number, base: number): void {
+    const px = this.sprite.x;
+    const py = this.sprite.y;
+    const range = 360 * this.rangeMult;
+
+    // Flash hipnótico lavanda na tela e tremor sutil
+    this.scene.cameras.main.flash(220, 192, 132, 252, false);
+    this.scene.cameras.main.shake(180, 0.004);
+
+    // Ondas hipnóticas de sono emanando do Bulbasaur
+    for (let r = 0; r < 3; r++) {
+      const ring = this.scene.add
+        .circle(px, py, 20, 0xa855f7, 0.32)
+        .setStrokeStyle(3.5, 0xc084fc, 0.9)
+        .setDepth(DEPTH.EFFECTS + 1);
       this.scene.tweens.add({
-        targets: beam,
+        targets: ring,
+        radius: range * (0.55 + r * 0.22),
         alpha: 0,
-        duration: 430,
-        onComplete: () => beam.destroy(),
+        delay: r * 140,
+        duration: 520,
+        onComplete: () => ring.destroy(),
       });
+    }
 
-      const poisonMult =
-        (1 + this.getAbilityLevel('grass_effect_spore') * 0.24) *
-        (1 + this.classDef.stats.effectStrengthBonus);
+    // Nuvem densa de esporos soníferos coloridos (violeta, esmeralda, dourado) se espalhando em leque
+    const sporeColors = [0xc084fc, 0x9333ea, 0x4ade80, 0x86efac, 0xfef08a];
+    for (let i = 0; i < 38; i++) {
+      const ang = aim + Phaser.Math.FloatBetween(-0.95, 0.95);
+      const dist = Phaser.Math.Between(50, range);
+      const color = Phaser.Utils.Array.GetRandom(sporeColors);
+      const radius = Phaser.Math.Between(4, 9);
+      const spore = this.scene.add
+        .circle(px, py, radius, color, 0.85)
+        .setDepth(DEPTH.EFFECTS + 2);
+      this.scene.tweens.add({
+        targets: spore,
+        x: px + Math.cos(ang) * dist,
+        y: py + Math.sin(ang) * dist,
+        scale: 1.8,
+        alpha: 0,
+        delay: Phaser.Math.Between(0, 180),
+        duration: 750,
+        onComplete: () => spore.destroy(),
+      });
+    }
 
-      const line = new Phaser.Geom.Line(sx, sy, ex, ey);
-      for (const e of this.enemiesProvider()) {
-        if (e.isDead) continue;
-        const pt = Phaser.Geom.Line.GetNearestPoint(
-          line,
-          new Phaser.Geom.Point(e.sprite.x, e.sprite.y)
-        );
-        const onSegment =
-          Math.min(sx, ex) - halfWidth <= pt.x &&
-          pt.x <= Math.max(sx, ex) + halfWidth &&
-          Math.min(sy, ey) - halfWidth <= pt.y &&
-          pt.y <= Math.max(sy, ey) + halfWidth;
-        if (
-          onSegment &&
-          Phaser.Math.Distance.Between(pt.x, pt.y, e.sprite.x, e.sprite.y) <=
-            halfWidth + 14
-        ) {
-          this.dealDamage(e, base * 2.25, {
-            special: true,
-            knockback: 180,
-            skipBasicProc: true,
-          });
-          // ULT do Bulbasaur SEMPRE aplica Envenenamento Tóxico!
-          e.applyStatusEffect({
-            slowFactor: 0.35,
-            slowDurationMs: 3400,
-            dotDamagePerSec: 10 * poisonMult,
-            dotDurationMs: 4500,
-            tintColor: 0x4ade80,
-            statusIcon: '☠️',
-          });
-        }
+    // Efeito em todos os inimigos na área ou no cone:
+    // Causa dano e COLOCA PARA DORMIR POR 3 SEGUNDOS (ficam 100% imóveis, sem atacar)!
+    for (const e of this.enemiesProvider()) {
+      if (e.isDead) continue;
+      const d = Phaser.Math.Distance.Between(px, py, e.sprite.x, e.sprite.y);
+      if (d > range) continue;
+      const angTo = Math.atan2(e.sprite.y - py, e.sprite.x - px);
+      const inCone = Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= 0.85 || d <= 65;
+
+      if (inCone) {
+        this.dealDamage(e, base * 2.35, {
+          special: true,
+          knockback: 70,
+          fromX: px,
+          fromY: py,
+          skipBasicProc: true,
+        });
+
+        // Coloca o pokémon para dormir por 3 segundos (3000 ms)!
+        e.applySleep(3000);
       }
-    });
+    }
   }
 
   /** ULT Água: Hidro Vórtice ('anim-especial-agua') centralizado com Encharcar garantido! */
   private specialHydroVortex(aim: number, base: number): void {
-    const radius = 195 * this.rangeMult;
-    const cx = this.sprite.x + Math.cos(aim) * 80;
-    const cy = this.sprite.y + Math.sin(aim) * 80;
+    const radius = 180 * this.rangeMult;
+    const cx = this.sprite.x + Math.cos(aim) * 60;
+    const cy = this.sprite.y + Math.sin(aim) * 60;
+
+    // Bolha Protetora: Squirtle fica protegido por uma bolha d'água reluzente
+    this.invulnerableMs = Math.max(this.invulnerableMs, 2600);
+    const bubble = this.scene.add
+      .circle(this.sprite.x, this.sprite.y, 42, 0x5ec8ff, 0.32)
+      .setStrokeStyle(3.5, 0xbfeaff, 0.95)
+      .setDepth(DEPTH.EFFECTS + 3);
+    
+    const followTimer = this.scene.time.addEvent({
+      delay: 16,
+      repeat: 160,
+      callback: () => {
+        if (!bubble.active) return;
+        bubble.setPosition(this.sprite.x, this.sprite.y);
+      }
+    });
+
+    this.scene.tweens.add({
+      targets: bubble,
+      alpha: 0,
+      delay: 2200,
+      duration: 400,
+      onComplete: () => {
+        followTimer.remove();
+        bubble.destroy();
+      }
+    });
 
     if (
       this.scene.textures.exists('sheet-especial-agua') &&
@@ -2484,7 +2609,7 @@ export class Player {
     ) {
       const vortexSpr = this.scene.add
         .sprite(cx, cy, 'sheet-especial-agua', 0)
-        .setScale(0.95)
+        .setScale(0.62)
         .setDepth(DEPTH.EFFECTS + 1);
       vortexSpr.play('anim-especial-agua');
       this.scene.tweens.add({

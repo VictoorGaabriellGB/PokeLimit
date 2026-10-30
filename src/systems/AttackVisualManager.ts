@@ -99,8 +99,8 @@ export class AttackVisualManager {
       const brightness = Math.max(r, g, b);
       if (brightness <= bgDarkMax) {
         d[i + 3] = 0;
-      } else if (brightness <= bgDarkMax + 24) {
-        const alpha = (brightness - bgDarkMax) / 24;
+      } else if (brightness <= bgDarkMax + 28) {
+        const alpha = Math.pow((brightness - bgDarkMax) / 28, 1.4);
         d[i + 3] = Math.round(d[i + 3] * alpha);
       }
     }
@@ -294,8 +294,12 @@ export class AttackVisualManager {
 
       ctx.save();
       ctx.translate(cx, cy);
-      // -90° coloca a base brilhante (+Y original) apontando para a DIREITA (+X)
       ctx.rotate(-Math.PI / 2);
+      // Contorno elétrico luminoso & corona voltaica
+      ctx.shadowColor = 'rgba(254, 240, 138, 0.9)';
+      ctx.shadowBlur = 8;
+      ctx.drawImage(src, b.minX, b.minY, bw, bh, -bw / 2, -bh / 2, bw, bh);
+      ctx.shadowBlur = 0;
       ctx.drawImage(src, b.minX, b.minY, bw, bh, -bw / 2, -bh / 2, bw, bh);
       ctx.restore();
 
@@ -368,19 +372,13 @@ export class AttackVisualManager {
 
       ctx.save();
       ctx.translate(cx, cy);
-      // +90° mapeia o topo da chama (-Y) para a DIREITA (+X) e a base (+Y) para a ESQUERDA (-X)
       ctx.rotate(Math.PI / 2);
-      ctx.drawImage(
-        src,
-        cellX0,
-        0,
-        cellW,
-        cellH,
-        -cellW / 2,
-        -cellH / 2,
-        cellW,
-        cellH
-      );
+      // Contorno ardente de fogo vivo e núcleo brilhante
+      ctx.shadowColor = 'rgba(255, 107, 0, 0.9)';
+      ctx.shadowBlur = 8;
+      ctx.drawImage(src, cellX0, 0, cellW, cellH, -cellW / 2, -cellH / 2, cellW, cellH);
+      ctx.shadowBlur = 0;
+      ctx.drawImage(src, cellX0, 0, cellW, cellH, -cellW / 2, -cellH / 2, cellW, cellH);
       ctx.restore();
     }
 
@@ -459,6 +457,11 @@ export class AttackVisualManager {
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(Phaser.Math.DegToRad(alignDeg[f]));
+      // Contorno de corte esmeralda afiado
+      ctx.shadowColor = 'rgba(74, 222, 128, 0.85)';
+      ctx.shadowBlur = 7;
+      ctx.drawImage(src, b.minX, b.minY, bw, bh, -bw / 2, -bh / 2, bw, bh);
+      ctx.shadowBlur = 0;
       ctx.drawImage(src, b.minX, b.minY, bw, bh, -bw / 2, -bh / 2, bw, bh);
       ctx.restore();
     }
@@ -527,18 +530,14 @@ export class AttackVisualManager {
       fCtx.quadraticCurveTo(cx - 22, cy + 20, cx - 62, cy + waveOffset);
       fCtx.fill();
 
-      // Desenha a esfera original de pixel-art na frente (+X)
-      fCtx.drawImage(
-        src,
-        b.minX,
-        b.minY,
-        bw,
-        bh,
-        cx - bw / 2,
-        cy - bh / 2,
-        bw,
-        bh
-      );
+      // Desenha a esfera com contorno hidro-cristalino
+      fCtx.save();
+      fCtx.shadowColor = 'rgba(56, 189, 248, 0.88)';
+      fCtx.shadowBlur = 7;
+      fCtx.drawImage(src, b.minX, b.minY, bw, bh, cx - bw / 2, cy - bh / 2, bw, bh);
+      fCtx.shadowBlur = 0;
+      fCtx.drawImage(src, b.minX, b.minY, bw, bh, cx - bw / 2, cy - bh / 2, bw, bh);
+      fCtx.restore();
 
       // Crista frontal de espuma em +X
       fCtx.strokeStyle = 'rgba(255, 255, 255, 0.88)';
@@ -641,7 +640,13 @@ export class AttackVisualManager {
       const dh = bh * scale;
       const dx = f * fW + (fW - dw) / 2;
       const dy = (fH - dh) / 2;
+      ctx.save();
+      ctx.shadowColor = 'rgba(254, 240, 138, 0.95)';
+      ctx.shadowBlur = 12;
       ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
+      ctx.shadowBlur = 0;
+      ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
+      ctx.restore();
     });
 
     const sheetKey = 'sheet-especial-eletrico';
@@ -686,9 +691,15 @@ export class AttackVisualManager {
       const scale = Math.min(1, (fW - 22) / bw, (fH - 16) / bh);
       const dw = bw * scale;
       const dh = bh * scale;
-      const dx = f * fW + 14; // bico ancorado em x = 14 (~4.5% da largura)
+      const dx = f * fW + 14;
       const dy = (fH - dh) / 2;
+      ctx.save();
+      ctx.shadowColor = 'rgba(255, 95, 20, 0.95)';
+      ctx.shadowBlur = 12;
       ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
+      ctx.shadowBlur = 0;
+      ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
+      ctx.restore();
     });
 
     const sheetKey = 'sheet-especial-fogo';
