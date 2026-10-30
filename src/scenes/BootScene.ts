@@ -1,12 +1,13 @@
 import Phaser from 'phaser';
 import { GAME_SETTINGS } from '../config/gameConfig';
+import { AttackVisualManager } from '../systems/AttackVisualManager';
 import { MapManager } from '../systems/MapManager';
 import { PokemonAnimationManager } from '../systems/PokemonAnimationManager';
 
 /**
  * BootScene:
- * Responsável por carregar os mapas e os spritesheets do PMD Collab
- * e registrar todas as animações de 8 direções antes da partida começar.
+ * Responsável por carregar os mapas, spritesheets do PMD Collab e sprites de ataque,
+ * processando animações transparentes e registrando todas as animações antes de iniciar o jogo.
  */
 export class BootScene extends Phaser.Scene {
   constructor() {
@@ -16,16 +17,22 @@ export class BootScene extends Phaser.Scene {
   preload(): void {
     this.createLoadingBar();
 
-    // 1. Carrega os mapas numerados (map1, map2, map3, map4, map6, map7)
+    // 1. Carrega os mapas numerados (map1, map2, map3, map4, map6, map7, map5-BOSS)
     MapManager.preloadAll(this);
 
-    // 2. Carrega todos os spritesheets do PMD Collab (#0025, #0001, #0004, #0007, #0019, #0041)
+    // 2. Carrega todos os spritesheets do PMD Collab
     PokemonAnimationManager.preloadAll(this);
+
+    // 3. Carrega os spritesheets de ataques e especiais
+    AttackVisualManager.preloadAll(this);
   }
 
   create(): void {
     // Registra as animações de 8 direções (Walk, Idle, Attack) para cada Pokémon
     PokemonAnimationManager.registerAllAnimations(this);
+
+    // Processa e registra as animações transparentes de ataques e especiais
+    AttackVisualManager.registerAll(this);
 
     this.scene.start('MenuScene');
   }

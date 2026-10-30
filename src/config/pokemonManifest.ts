@@ -116,9 +116,9 @@ export const POKEMON_CLASSES: Record<PokemonClassId, PokemonClassDefinition> = {
     colorNum: 0x00b4d8,
     iconSymbol: '🌀',
     description: [
-      'Golpes do tipo Efeito e SUPER ATAQUE,',
-      'Chance de efeito +15%, Força de Efeito +10%,',
-      'Velocidade da barra de Super aumentada.',
+      'Especialistas em controle de área e SUPER ATAQUE.',
+      'Potência e duração de efeitos +20%,',
+      'Velocidade da barra de ULT aumentada em +30%.',
     ],
     summary: [
       { text: '+ DANO ESPECIAL', positive: true },
@@ -135,8 +135,8 @@ export const POKEMON_CLASSES: Record<PokemonClassId, PokemonClassDefinition> = {
       critDamageBonus: 0,
       damageReduction: 0,
       passiveRegenPercentPerSec: 0,
-      effectChanceBonus: 0.15,
-      effectStrengthBonus: 0.1,
+      effectChanceBonus: 0,
+      effectStrengthBonus: 0.2,
       soloBuffMultiplier: 1.0,
       healEfficiencyMultiplier: 1.0,
     },
@@ -201,13 +201,21 @@ export const POKEMON_CLASSES: Record<PokemonClassId, PokemonClassDefinition> = {
       critDamageBonus: 0,
       damageReduction: 0.1,
       passiveRegenPercentPerSec: 0.015,
-      effectChanceBonus: 0.1,
+      effectChanceBonus: 0,
       effectStrengthBonus: 0.2,
       soloBuffMultiplier: 1.25,
       healEfficiencyMultiplier: 1.25,
     },
   },
 };
+
+export interface PokemonInnatePassive {
+  name: string;
+  icon: string;
+  statusName: string;
+  baseStatusChance: number;
+  description: string;
+}
 
 export interface PokemonAnimConfig {
   file: string;
@@ -250,6 +258,7 @@ export interface PokemonDefinition {
   baseHp: number;
   speed: number;
   scale: number;
+  innatePassive?: PokemonInnatePassive;
   attackProfile?: PokemonAttackProfile;
   anims: Record<PokemonAnimType, PokemonAnimConfig>;
 }
@@ -358,8 +367,16 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 95,
     speed: 195,
     scale: 1.45,
+    innatePassive: {
+      name: 'Estática (Static)',
+      icon: '⚡',
+      statusName: 'Paralisia',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Paralisar no ataque básico; 30% de chance de Paralisar inimigos ao contato.',
+    },
     attackProfile: {
-      name: 'Esfera Elétrica',
+      name: 'Choque do Trovão',
       element: 'eletrico',
       elementLabel: 'Elétrico',
       elementColor: 0xf7d02c,
@@ -368,7 +385,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       baseDamage: 18,
       cooldownMs: 920,
       range: 280,
-      description: 'Dispara raios elétricos rápidos à distância com chance de crítico.',
+      description: 'Dispara lanças elétricas rápidas à distância (5% de Paralisia base).',
     },
     anims: {
       Walk: {
@@ -402,8 +419,16 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 135,
     speed: 210,
     scale: 1.5,
+    innatePassive: {
+      name: 'Estática & Surfista (Static)',
+      icon: '⚡',
+      statusName: 'Paralisia',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Paralisar no ataque básico; 35% de chance de Paralisar ao contato.',
+    },
     attackProfile: {
-      name: 'Trovão Supremo',
+      name: 'Relâmpago Direto',
       element: 'eletrico',
       elementLabel: 'Elétrico',
       elementColor: 0xffae00,
@@ -412,7 +437,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       baseDamage: 29,
       cooldownMs: 780,
       range: 320,
-      description: 'Dispara descargas elétricas de alta voltagem com explosão em área.',
+      description: 'Dispara descargas elétricas de alta voltagem na direção do alvo.',
     },
     anims: {
       Walk: {
@@ -451,6 +476,14 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 110,
     speed: 185,
     scale: 1.45,
+    innatePassive: {
+      name: 'Chama Ardente (Blaze)',
+      icon: '🔥',
+      statusName: 'Queimadura',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de aplicar Queimadura no ataque básico; até +30% de dano de Fogo com HP baixo.',
+    },
     attackProfile: {
       name: 'Garra de Brasas',
       element: 'fogo',
@@ -461,7 +494,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       baseDamage: 22,
       cooldownMs: 1020,
       range: 100,
-      description: 'Golpe flamejante de perto que causa mais dano conforme o HP cai.',
+      description: 'Golpe flamejante frontal (5% base de Queimadura; mais forte com HP baixo).',
     },
     anims: {
       Walk: {
@@ -497,8 +530,16 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 145,
     speed: 195,
     scale: 1.5,
+    innatePassive: {
+      name: 'Chama Ardente (Blaze)',
+      icon: '🔥',
+      statusName: 'Queimadura',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de aplicar Queimadura no ataque básico; até +30% de dano de Fogo com HP baixo.',
+    },
     attackProfile: {
-      name: 'Talho Lança-Chamas',
+      name: 'Talho Flamejante',
       element: 'fogo',
       elementLabel: 'Fogo',
       elementColor: 0xff3d00,
@@ -507,7 +548,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       baseDamage: 30,
       cooldownMs: 920,
       range: 120,
-      description: 'Arco intenso de fogo que incendeia múltiplos inimigos próximos.',
+      description: 'Arco intenso de fogo direcionado aos inimigos à frente.',
     },
     anims: {
       Walk: {
@@ -541,8 +582,16 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 190,
     speed: 208,
     scale: 1.55,
+    innatePassive: {
+      name: 'Chama Dracônica (Blaze)',
+      icon: '🔥',
+      statusName: 'Queimadura',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de aplicar Queimadura no ataque básico; até +30% de dano de Fogo com HP baixo.',
+    },
     attackProfile: {
-      name: 'Explosão Ígnea Dracônica',
+      name: 'Garra Ígnea Dracônica',
       element: 'fogo',
       elementLabel: 'Fogo',
       elementColor: 0xd50000,
@@ -590,8 +639,16 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 115,
     speed: 170,
     scale: 1.45,
+    innatePassive: {
+      name: 'Espessura Tóxica (Overgrow)',
+      icon: '☠️',
+      statusName: 'Envenenamento',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Envenenar no ataque básico; ULT sempre causa Envenenamento Tóxico; +22% dano com HP baixo.',
+    },
     attackProfile: {
-      name: 'Folha Navalha & Esporos',
+      name: 'Folha Navalha',
       element: 'planta',
       elementLabel: 'Planta',
       elementColor: 0x4caf50,
@@ -600,7 +657,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       baseDamage: 16,
       cooldownMs: 1100,
       range: 215,
-      description: 'Lança folhas cortantes e esporos que aplicam Lentidão e Veneno.',
+      description: 'Lança folhas cortantes direcionadas que reduzem velocidade (5% de Veneno base).',
     },
     anims: {
       Walk: {
@@ -636,8 +693,16 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 150,
     speed: 178,
     scale: 1.5,
+    innatePassive: {
+      name: 'Espessura Tóxica (Overgrow)',
+      icon: '☠️',
+      statusName: 'Envenenamento',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Envenenar no ataque básico; ULT sempre causa Envenenamento Tóxico; +22% dano com HP baixo.',
+    },
     attackProfile: {
-      name: 'Dança de Folhas Tóxicas',
+      name: 'Dança de Folhas',
       element: 'planta',
       elementLabel: 'Planta',
       elementColor: 0x2e7d32,
@@ -646,7 +711,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       baseDamage: 24,
       cooldownMs: 980,
       range: 245,
-      description: 'Dispara rajadas de folhas e esporos paralisantes de longo alcance.',
+      description: 'Dispara rajadas afiadas de folhas perfurantes de longo alcance.',
     },
     anims: {
       Walk: {
@@ -680,8 +745,16 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 195,
     speed: 185,
     scale: 1.6,
+    innatePassive: {
+      name: 'Espessura Floral (Overgrow)',
+      icon: '☠️',
+      statusName: 'Envenenamento',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Envenenar no ataque básico; ULT sempre causa Envenenamento Tóxico; +22% dano com HP baixo.',
+    },
     attackProfile: {
-      name: 'Tempestade Floral Venenosa',
+      name: 'Tempestade Floral',
       element: 'planta',
       elementLabel: 'Planta',
       elementColor: 0x1b5e20,
@@ -690,7 +763,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       baseDamage: 35,
       cooldownMs: 880,
       range: 275,
-      description: 'Cria uma tempestade de pétalas e toxinas que controla toda a área.',
+      description: 'Cria uma tempestade de lâminas botânicas que controla a área.',
     },
     anims: {
       Walk: {
@@ -729,6 +802,14 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 145,
     speed: 168,
     scale: 1.45,
+    innatePassive: {
+      name: 'Torrente (Torrent)',
+      icon: '💧',
+      statusName: 'Encharcar',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Encharcar (-45% vel.) no ataque básico; +22% de dano de Água com HP baixo.',
+    },
     attackProfile: {
       name: 'Pulso de Água',
       element: 'agua',
@@ -738,8 +819,8 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       style: 'wave_water',
       baseDamage: 17,
       cooldownMs: 1050,
-      range: 140,
-      description: 'Dispara uma onda pressurizada de água que empurra os inimigos.',
+      range: 155,
+      description: 'Dispara esferas pressurizadas de água que empurram os inimigos.',
     },
     anims: {
       Walk: {
@@ -775,6 +856,14 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 185,
     speed: 176,
     scale: 1.5,
+    innatePassive: {
+      name: 'Torrente (Torrent)',
+      icon: '💧',
+      statusName: 'Encharcar',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Encharcar (-45% vel.) no ataque básico; +22% de dano de Água com HP baixo.',
+    },
     attackProfile: {
       name: 'Torrente Marinha',
       element: 'agua',
@@ -784,8 +873,8 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       style: 'wave_water',
       baseDamage: 25,
       cooldownMs: 950,
-      range: 165,
-      description: 'Onda dupla de alta pressão que repele hordas inteiras.',
+      range: 175,
+      description: 'Jato hidráulico de alta pressão que repele hordas inteiras.',
     },
     anims: {
       Walk: {
@@ -819,6 +908,14 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 245,
     speed: 182,
     scale: 1.6,
+    innatePassive: {
+      name: 'Torrente Colossal (Torrent)',
+      icon: '💧',
+      statusName: 'Encharcar',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Encharcar (-45% vel.) no ataque básico; +22% de dano de Água com HP baixo.',
+    },
     attackProfile: {
       name: 'Hidro Bomba Colossal',
       element: 'agua',
@@ -828,7 +925,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       style: 'wave_water',
       baseDamage: 38,
       cooldownMs: 880,
-      range: 195,
+      range: 205,
       description: 'Disparo massivo dos canhões hidráulicos com grande impacto.',
     },
     anims: {
@@ -868,6 +965,14 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 125,
     speed: 175,
     scale: 1.45,
+    innatePassive: {
+      name: 'Charme Fofo (Cute Charm)',
+      icon: '💖',
+      statusName: 'Encanto',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Encantar no ataque básico; 30% de chance de Encantar quem tocar em você.',
+    },
     attackProfile: {
       name: 'Canto Melódico & Aura',
       element: 'fada',
@@ -877,8 +982,8 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       style: 'support_song',
       baseDamage: 16,
       cooldownMs: 1080,
-      range: 155,
-      description: 'Emite notas musicais em área que causam dano, curam HP e fortalecem.',
+      range: 165,
+      description: 'Emite notas harmônicas direcionadas e em pulso que curam HP.',
     },
     anims: {
       Walk: {
@@ -912,6 +1017,14 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
     baseHp: 175,
     speed: 185,
     scale: 1.5,
+    innatePassive: {
+      name: 'Charme Feérico (Cute Charm)',
+      icon: '💖',
+      statusName: 'Encanto',
+      baseStatusChance: 0.05,
+      description:
+        '5% de chance base de Encantar no ataque básico; 35% de chance de Encantar quem tocar em você.',
+    },
     attackProfile: {
       name: 'Sinfonia Estelar & Cura',
       element: 'fada',
@@ -921,8 +1034,8 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       style: 'support_song',
       baseDamage: 27,
       cooldownMs: 920,
-      range: 185,
-      description: 'Ondas harmônicas supremas que restauram vida e adormecem inimigos.',
+      range: 195,
+      description: 'Ondas harmônicas estelares que restauram vida e controlam inimigos.',
     },
     anims: {
       Walk: {

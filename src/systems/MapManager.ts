@@ -826,27 +826,39 @@ export class MapManager {
   }
 
   /**
-   * Exige que a célula central e TODAS as 8 células ao redor (bloco 3x3) estejam desbloqueadas,
-   * garantindo folga total para o corpo físico do jogador e dos inimigos.
+   * Verifica se a célula é caminhável e possui folga adequada para o corpo do jogador/inimigo.
    */
   private isCellAndNeighborsWalkable(
     m: ActiveMapInstance,
     row: number,
     col: number
   ): boolean {
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        const r = row + dr;
-        const c = col + dc;
-        if (r < 1 || r >= m.rows - 1 || c < 1 || c >= m.cols - 1) {
-          return false;
-        }
-        if (m.blockedGrid[r]?.[c]) {
-          return false;
-        }
+    if (row < 1 || row >= m.rows - 1 || col < 1 || col >= m.cols - 1) {
+      return false;
+    }
+    if (m.blockedGrid[row]?.[col]) {
+      return false;
+    }
+
+    let freeNeighbors = 0;
+    const dirs = [
+      [-1, 0],
+      [1, 0],
+      [0, -1],
+      [0, 1],
+      [-1, -1],
+      [-1, 1],
+      [1, -1],
+      [1, 1],
+    ];
+    for (const [dr, dc] of dirs) {
+      const r = row + dr;
+      const c = col + dc;
+      if (!m.blockedGrid[r]?.[c]) {
+        freeNeighbors++;
       }
     }
-    return true;
+    return freeNeighbors >= 4;
   }
 
   private applySingleMapWorldBounds(m: ActiveMapInstance): void {
@@ -1022,9 +1034,10 @@ export class MapManager {
   }
 
   /**
-   * Detecção rigorosa de obstáculos por amostragem de pixels:
-   * Árvores, casas, paredes, cercas, pedras/falésias e rios/lagos bloqueiam sempre,
-   * mesmo nas bordas das células (sem ser sobrescritos pela grama ao redor).
+   * Detecção precisa de obstáculos por amostragem de pixels:
+   * Árvores densas, construções (telhados/paredes), cercas, falésias e rios bloqueiam,
+   * enquanto grama baixa, grama alta (matinhos escuros), caminhos de areia e calçadas
+   * são 100% livres para caminhar e NUNCA bloqueiam o jogador ou inimigos.
    */
   private isRawCellObstacle(
     data: Uint8ClampedArray,
@@ -1039,6 +1052,7 @@ export class MapManager {
     let building = 0;
     let fence = 0;
     let rock = 0;
+    let walkable = 0;
     let total = 0;
 
     const endX = Math.min(startX + RAW_CELL_SIZE, imgW);
@@ -1052,8 +1066,8 @@ export class MapManager {
         const b = data[idx + 2];
         total++;
 
-        // 1. Rios, lagos e bordas d'água (azul dominante)
-        if (b > r + 28 && b > g + 8 && b > 118 && r < 130) {
+        // 1. Rios, lagos e corpos d'água (azul claramente predominante)
+        if (b > r + 30 && b > g + 10 && b >= 115 && r < 130) {
           water++;
           continue;
         }
@@ -1061,17 +1075,18 @@ export class MapManager {
         // 2. Tema de Caverna (map6, map7)
         if (theme === 'cave') {
           const isSand =
-            r > 180 && g > 165 && b > 95 && Math.abs(r - g) < 30;
+            r > 175 && g > 160 && b > 90 && Math.abs(r - g) < 32;
           const isCaveFloor =
-            r >= 115 &&
-            r <= 185 &&
-            g >= 122 &&
-            g <= 192 &&
-            b >= 92 &&
-            b <= 162 &&
-            g >= r - 14;
-          const isMoss = g > r + 12 && g > b + 10;
+            r >= 110 &&
+            r <= 190 &&
+            g >= 118 &&
+            g <= 198 &&
+            b >= 88 &&
+            b <= 168 &&
+            g >= r - 16;
+          const isMoss = g > r + 12 && g > b + 8;
           if (isSand || isCaveFloor || isMoss) {
+            walkable++;
             continue;
           }
           if (
@@ -1083,68 +1098,56 @@ export class MapManager {
           continue;
         }
 
-        // 3. Terrenos caminháveis explícitos em mapas de floresta/cidade:
-        // - Grama baixa (verde-azulado claro típico de FireRed/LeafGreen: R~95, G~200, B~135)
-        const isLightGrass =
-          g >= 150 &&
-          g > r + 42 &&
-          b >= 95 &&
-          b <= 168 &&
-          g >= b + 28 &&
-          r >= 65 &&
-          r <= 135;
+        // 3. TERRENOS CAMINHO / GRAMA (100% LIVRES):
+        // Grama (baixa ou alta): verde é o canal dominante sobre vermelho e azul
+        const isGrass =
+          g >= 68 &&
+          g >= r + 10 &&
+          g >= b - 12 &&
+          r <= 160 &&
+          b <= 175;
 
-        // - Grama alta (folhas escuras/médias no chão sem tronco nem copa amarelada)
-        const isTallGrass =
-          g >= 105 &&
-          g <= 175 &&
-          r >= 35 &&
-          r <= 95 &&
-          b >= 55 &&
-          b <= 120 &&
-          g > r + 45 &&
-          g > b + 22;
-
-        // - Estrada de areia / terra amarelada
+        // Estrada de areia / terra amarelada
         const isDirtRoad =
-          r >= 188 &&
-          g >= 165 &&
-          b >= 95 &&
-          b <= 178 &&
-          r >= g - 10 &&
-          r - g <= 38 &&
-          g > b + 24;
+          r >= 170 &&
+          g >= 145 &&
+          b >= 80 &&
+          b <= 190 &&
+          r >= g - 12 &&
+          r - g <= 46 &&
+          g > b + 18;
 
-        // - Caminho branco/pedra clara (calçadas de map1, map2 e map4)
+        // Caminhos e calçadas de pedra clara (map1, map2, map4)
         const isWhiteRoad =
-          r >= 182 &&
-          g >= 190 &&
-          b >= 195 &&
-          Math.abs(r - g) <= 22 &&
-          b >= r - 10 &&
-          b - r <= 34;
+          r >= 165 &&
+          g >= 165 &&
+          b >= 165 &&
+          Math.abs(r - g) <= 28 &&
+          Math.abs(g - b) <= 30;
 
-        // - Flores vermelhas/laranjas pequenas no chão
+        // Flores coloridas no chão
         const isFlower =
-          r > 195 && g >= 70 && g <= 155 && b >= 45 && b <= 120;
+          r > 180 && g >= 55 && g <= 165 && b >= 35 && b <= 135;
 
-        if (
-          isLightGrass ||
-          isTallGrass ||
-          isDirtRoad ||
-          isWhiteRoad ||
-          isFlower
-        ) {
+        if (isGrass || isDirtRoad || isWhiteRoad || isFlower) {
+          walkable++;
           continue;
         }
 
-        // 4. Copas de árvores (verde-amarelado brilhante no topo ou sombra verde muito escura/tronco)
-        const isTreeHighlight =
-          g >= 128 && b < 96 && g - b >= 48 && r >= b + 8;
-        const isTreeShadowOrTrunk =
-          (g < 118 && b < 68 && r < 98) ||
-          (r >= 70 && r <= 128 && g >= 52 && g <= 98 && b >= 28 && b <= 68 && r > b + 22);
-        if (isTreeHighlight || isTreeShadowOrTrunk) {
+        // 4. Copas de árvores reais (destaque amarelado muito brilhante ou tronco marrom)
+        const isTreeCrownDome =
+          g >= 142 && r >= 95 && b <= 78 && g - b >= 62 && r > b + 18;
+        const isTreeTrunk =
+          r >= 78 &&
+          r <= 155 &&
+          g >= 40 &&
+          g <= 98 &&
+          b >= 20 &&
+          b <= 68 &&
+          r > g + 18;
+        const isTreeShadowPitch = r < 45 && g < 60 && b < 42;
+
+        if (isTreeCrownDome || isTreeTrunk || isTreeShadowPitch) {
           tree++;
           continue;
         }
@@ -1155,9 +1158,9 @@ export class MapManager {
           r <= 195 &&
           g >= 65 &&
           g <= 138 &&
-          b >= 45 &&
-          b <= 112 &&
-          r > g + 20 &&
+          b >= 40 &&
+          b <= 108 &&
+          r > g + 24 &&
           g >= b
         ) {
           fence++;
@@ -1166,7 +1169,7 @@ export class MapManager {
 
         // 6. Paredes rochosas, falésias marrons e pedras cinzas
         const isBrownCliff =
-          r > g + 16 && g > b + 8 && r >= 95 && r <= 212 && b < 130;
+          r > g + 18 && g > b + 10 && r >= 95 && r <= 215 && b < 125;
         const isGreyRock =
           r >= 85 &&
           r <= 155 &&
@@ -1174,20 +1177,19 @@ export class MapManager {
           g <= 155 &&
           b >= 85 &&
           b <= 160 &&
-          Math.abs(r - g) <= 16 &&
-          Math.abs(g - b) <= 18;
+          Math.abs(r - g) <= 12 &&
+          Math.abs(g - b) <= 12;
         if (isBrownCliff || isGreyRock) {
           rock++;
           continue;
         }
 
-        // 7. Telhados e fachadas de construções (vermelho, azul, amarelo-telha, cinza-azulado)
-        const isRoofOrWall =
-          (r > 160 && g < 105 && b < 105) ||
-          (b > 142 && r < 120 && g < 170) ||
-          (r > 155 && g > 120 && g < 172 && b < 98) ||
-          (r >= 65 && r <= 145 && g >= 70 && g <= 148 && b >= 88 && b <= 165);
-        if (isRoofOrWall) {
+        // 7. Telhados e paredes de prédios (caso não estejam nas bounding boxes)
+        const isRoof =
+          (r > 165 && g < 100 && b < 100) ||
+          (b > 145 && r < 118 && g < 172) ||
+          (r > 160 && g > 118 && g < 175 && b < 95);
+        if (isRoof) {
           building++;
         }
       }
@@ -1195,27 +1197,31 @@ export class MapManager {
 
     if (total === 0) return false;
 
+    // Se pelo menos 32% da célula for chão caminhável (grama, terra, calçada),
+    // a célula NÃO é um obstáculo fechado (permite passagem suave por trilhas e gramados)
+    const walkableRatio = walkable / total;
     const waterRatio = water / total;
-    const treeRatio = tree / total;
-    const rockRatio = rock / total;
-    const buildingRatio = building / total;
     const fenceRatio = fence / total;
-    const totalObstacleRatio =
-      (water + tree + rock + building + fence) / total;
+    const rockRatio = rock / total;
+    const treeRatio = tree / total;
+    const buildingRatio = building / total;
 
     if (theme === 'cave') {
-      return waterRatio >= 0.18 || rockRatio >= 0.24;
+      return waterRatio >= 0.25 || rockRatio >= 0.38;
     }
 
-    // Limiares rigorosos: qualquer árvore, casa, parede, pedra, cerca ou rio bloqueia a célula!
-    return (
-      waterRatio >= 0.16 ||
-      treeRatio >= 0.18 ||
-      rockRatio >= 0.20 ||
-      buildingRatio >= 0.18 ||
-      fenceRatio >= 0.15 ||
-      totalObstacleRatio >= 0.22
-    );
+    // Água e cercas sempre bloqueiam se tiverem presença relevante
+    if (waterRatio >= 0.26) return true;
+    if (fenceRatio >= 0.28) return true;
+    if (rockRatio >= 0.36) return true;
+
+    // Se tem grama/caminho suficiente, NUNCA bloqueia
+    if (walkableRatio >= 0.30) {
+      return false;
+    }
+
+    // Caso contrário, bloqueia se a maioria da célula for árvore ou prédio
+    return treeRatio >= 0.45 || buildingRatio >= 0.35;
   }
 
   private buildStaticZonesForMap(m: ActiveMapInstance): void {

@@ -8,6 +8,7 @@ import {
   PokemonClassId,
   STARTER_IDS,
 } from '../config/pokemonManifest';
+import { AttackVisualManager } from '../systems/AttackVisualManager';
 import { PokemonAnimationManager } from '../systems/PokemonAnimationManager';
 import { RunHistory } from '../systems/RunHistory';
 
@@ -28,7 +29,12 @@ export class MenuScene extends Phaser.Scene {
 
   private detailTitleText!: Phaser.GameObjects.Text;
   private detailClassDescText!: Phaser.GameObjects.Text;
-  private detailMovesText!: Phaser.GameObjects.Text;
+  private detailBasicIcon!: Phaser.GameObjects.Image;
+  private detailBasicText!: Phaser.GameObjects.Text;
+  private detailUltIcon!: Phaser.GameObjects.Image;
+  private detailUltText!: Phaser.GameObjects.Text;
+  private detailInnateIcon!: Phaser.GameObjects.Image;
+  private detailInnateText!: Phaser.GameObjects.Text;
   private detailEvoText!: Phaser.GameObjects.Text;
   private detailPanelBorder!: Phaser.GameObjects.Rectangle;
   private evoPreviewContainer!: Phaser.GameObjects.Container;
@@ -486,42 +492,81 @@ export class MenuScene extends Phaser.Scene {
   private createDetailBottomPanel(): void {
     const w = GAME_SETTINGS.WIDTH;
     const panelW = w - 40;
-    const panelH = 190;
+    const panelH = 194;
     const panelX = w / 2;
     const panelY = 594;
 
     this.detailPanelBorder = this.add
-      .rectangle(panelX, panelY, panelW, panelH, 0x071120, 0.95)
+      .rectangle(panelX, panelY, panelW, panelH, 0x071120, 0.96)
       .setStrokeStyle(3, 0xffcb05, 1);
 
-    const leftX = panelX - panelW / 2 + 20;
-    const topY = panelY - panelH / 2 + 14;
+    // Reflexo vítreo superior discreto no painel inferior
+    this.add.rectangle(
+      panelX,
+      panelY - panelH / 2 + 18,
+      panelW - 8,
+      32,
+      0xffffff,
+      0.035
+    );
+
+    const leftX = panelX - panelW / 2 + 18;
+    const topY = panelY - panelH / 2 + 10;
 
     this.detailTitleText = this.add.text(leftX, topY, '', {
       fontFamily: 'monospace',
-      fontSize: '19px',
+      fontSize: '17.5px',
       fontStyle: 'bold',
       color: '#ffcb05',
     });
 
-    this.detailClassDescText = this.add.text(leftX, topY + 28, '', {
+    this.detailClassDescText = this.add.text(leftX, topY + 23, '', {
       fontFamily: 'monospace',
-      fontSize: '12.5px',
-      color: '#e2e8f0',
-      lineSpacing: 4,
+      fontSize: '11.5px',
+      color: '#cbd5e1',
+      lineSpacing: 2,
     });
 
-    this.detailMovesText = this.add.text(leftX, topY + 94, '', {
+    const row1Y = topY + 68;
+    const row2Y = topY + 101;
+    const row3Y = topY + 134;
+
+    this.detailBasicIcon = this.add
+      .image(leftX + 13, row1Y + 8, AttackVisualManager.getMoveIconKey('eletrico', 'basic'))
+      .setDisplaySize(25, 25);
+    this.detailBasicText = this.add.text(leftX + 32, row1Y, '', {
       fontFamily: 'monospace',
-      fontSize: '12.5px',
+      fontSize: '11.5px',
       fontStyle: 'bold',
       color: '#38bdf8',
-      lineSpacing: 5,
+      wordWrap: { width: 648 },
     });
 
-    this.detailEvoText = this.add.text(leftX, topY + 146, '', {
+    this.detailUltIcon = this.add
+      .image(leftX + 13, row2Y + 8, AttackVisualManager.getMoveIconKey('eletrico', 'ult'))
+      .setDisplaySize(25, 25);
+    this.detailUltText = this.add.text(leftX + 32, row2Y, '', {
       fontFamily: 'monospace',
-      fontSize: '12.5px',
+      fontSize: '11.5px',
+      fontStyle: 'bold',
+      color: '#c084fc',
+      wordWrap: { width: 648 },
+    });
+
+    this.detailInnateIcon = this.add
+      .image(leftX + 13, row3Y + 8, AttackVisualManager.getMoveIconKey('eletrico', 'innate'))
+      .setDisplaySize(25, 25);
+    this.detailInnateText = this.add.text(leftX + 32, row3Y, '', {
+      fontFamily: 'monospace',
+      fontSize: '11.5px',
+      fontStyle: 'bold',
+      color: '#fde047',
+      wordWrap: { width: 648 },
+    });
+
+    this.detailEvoText = this.add.text(leftX, topY + 168, '', {
+      fontFamily: 'monospace',
+      fontSize: '11.5px',
       fontStyle: 'bold',
       color: '#4ade80',
     });
@@ -533,6 +578,15 @@ export class MenuScene extends Phaser.Scene {
       .rectangle(startBtnX, panelY, 240, 74, 0xffcb05, 1)
       .setStrokeStyle(3, 0xffffff, 1)
       .setInteractive({ useHandCursor: true });
+
+    const startBtnShine = this.add.rectangle(
+      startBtnX,
+      panelY - 22,
+      232,
+      18,
+      0xffffff,
+      0.24
+    );
 
     const startBtnLabel = this.add
       .text(startBtnX, panelY, '⚔️ INICIAR JORNADA\n[ENTER / ESPAÇO]', {
@@ -547,6 +601,7 @@ export class MenuScene extends Phaser.Scene {
     startBtnBg.on('pointerover', () => startBtnBg.setFillStyle(0xffe066, 1));
     startBtnBg.on('pointerout', () => startBtnBg.setFillStyle(0xffcb05, 1));
     startBtnBg.on('pointerdown', () => this.startGame());
+    startBtnShine.on('pointerdown', () => this.startGame());
     startBtnLabel.on('pointerdown', () => this.startGame());
   }
 
@@ -607,14 +662,34 @@ export class MenuScene extends Phaser.Scene {
 
     this.detailPanelBorder.setStrokeStyle(3, cls.colorNum, 1);
     this.detailTitleText.setText(
-      `${cls.iconSymbol} ${poke.name.toUpperCase()} — Classe: ${cls.title}`
+      `${cls.iconSymbol} ${poke.name.toUpperCase()} — Classe: ${cls.title} (Habilidades Exclusivas: ${atk.elementLabel})`
     );
-    this.detailClassDescText.setText(cls.description.join('\n'));
-    this.detailMovesText.setText(
-      [
-        `⚔️ Ataque Básico [ESPAÇO/Auto]: ${atk.name} (${atk.elementLabel}) — ${atk.description}`,
-        `${spec.icon} Especial [E / Q]: ${spec.name} — ${spec.description}`,
-      ].join('\n')
+    this.detailClassDescText.setText(cls.description.join('  •  '));
+
+    const basicTex = AttackVisualManager.getMoveIconKey(atk.element, 'basic');
+    const ultTex = AttackVisualManager.getMoveIconKey(atk.element, 'ult');
+    const innateTex = AttackVisualManager.getMoveIconKey(atk.element, 'innate');
+
+    if (this.textures.exists(basicTex)) {
+      this.detailBasicIcon.setTexture(basicTex).setDisplaySize(25, 25);
+    }
+    if (this.textures.exists(ultTex)) {
+      this.detailUltIcon.setTexture(ultTex).setDisplaySize(25, 25);
+    }
+    if (this.textures.exists(innateTex)) {
+      this.detailInnateIcon.setTexture(innateTex).setDisplaySize(25, 25);
+    }
+
+    this.detailBasicText.setText(
+      `Básico [ESPAÇO/Auto]: ${atk.name} — ${atk.description}`
+    );
+    this.detailUltText.setText(
+      `ULT [E / Q]: ${spec.name} — ${spec.description}`
+    );
+    this.detailInnateText.setText(
+      poke.innatePassive
+        ? `Passiva Inata: ${poke.innatePassive.name} — ${poke.innatePassive.description}`
+        : ''
     );
     this.detailEvoText.setText(
       `✨ Evoluções: ${poke.evolutionLineText ?? 'Forma Única'}   |   👑 Boss Final no Nível ${MAX_PLAYER_LEVEL}: ONIX`

@@ -12,3 +12,4 @@ attackProfile: {
   spriteScale: 1.0,
 }
 ```
+

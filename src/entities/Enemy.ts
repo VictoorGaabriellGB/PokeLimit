@@ -32,6 +32,7 @@ export class Enemy {
   private poisonTimerMs = 0;
   private poisonTickAccumMs = 0;
   private poisonDamagePerSec = 0;
+  private activeStatusTint: number | null = null;
   private bossSkillTimerMs = 0;
   private sleepIcon: Phaser.GameObjects.Text | null = null;
 
@@ -82,6 +83,10 @@ export class Enemy {
     return this.slowTimerMs > 0 && this.slowFactor < 0.05;
   }
 
+  hasSlowOrParalysis(): boolean {
+    return this.slowTimerMs > 0;
+  }
+
   update(
     delta: number,
     targetX: number,
@@ -95,9 +100,12 @@ export class Enemy {
       this.slowTimerMs -= delta;
       if (this.slowTimerMs <= 0) {
         this.slowFactor = 1;
-        this.clearSleepIcon();
-        if (this.poisonTimerMs <= 0 && this.sprite.active) {
-          this.sprite.clearTint();
+        if (this.poisonTimerMs <= 0) {
+          this.activeStatusTint = null;
+          this.clearSleepIcon();
+          if (this.sprite.active) {
+            this.sprite.clearTint();
+          }
         }
       }
     }
@@ -116,8 +124,12 @@ export class Enemy {
       }
       if (this.poisonTimerMs <= 0) {
         this.poisonDamagePerSec = 0;
-        if (this.slowTimerMs <= 0 && this.sprite.active) {
-          this.sprite.clearTint();
+        if (this.slowTimerMs <= 0) {
+          this.activeStatusTint = null;
+          this.clearSleepIcon();
+          if (this.sprite.active) {
+            this.sprite.clearTint();
+          }
         }
       }
     }
@@ -258,6 +270,7 @@ export class Enemy {
     dotDurationMs?: number;
     tintColor?: number;
     showSleepIcon?: boolean;
+    statusIcon?: string;
   }): void {
     if (this.isDead) return;
 
@@ -285,23 +298,31 @@ export class Enemy {
       this.poisonTimerMs = Math.max(this.poisonTimerMs, options.dotDurationMs);
     }
 
-    if (options.tintColor && this.sprite.active) {
-      this.sprite.setTint(options.tintColor);
+    if (options.tintColor) {
+      this.activeStatusTint = options.tintColor;
+      if (this.sprite.active) {
+        this.sprite.setTint(options.tintColor);
+      }
     }
 
-    if (options.showSleepIcon && !this.sleepIcon) {
-      this.sleepIcon = this.scene.add
-        .text(
-          this.sprite.x + 10,
-          this.sprite.y - (this.isBoss ? 52 : 26),
-          '💤',
-          {
-            fontFamily: 'monospace',
-            fontSize: '14px',
-          }
-        )
-        .setOrigin(0.5)
-        .setDepth(DEPTH.FLOATING_TEXT - 1);
+    const iconChar = options.statusIcon ?? (options.showSleepIcon ? '💤' : undefined);
+    if (iconChar) {
+      if (!this.sleepIcon) {
+        this.sleepIcon = this.scene.add
+          .text(
+            this.sprite.x + 10,
+            this.sprite.y - (this.isBoss ? 52 : 26),
+            iconChar,
+            {
+              fontFamily: 'monospace',
+              fontSize: '13px',
+            }
+          )
+          .setOrigin(0.5)
+          .setDepth(DEPTH.FLOATING_TEXT - 1);
+      } else {
+        this.sleepIcon.setText(iconChar);
+      }
     }
   }
 
@@ -320,8 +341,11 @@ export class Enemy {
     this.sprite.setTintFill(isCrit ? 0xffcb05 : 0xffffff);
     this.scene.time.delayedCall(90, () => {
       if (!this.isDead && this.sprite.active) {
-        if (this.slowTimerMs > 0 || this.poisonTimerMs > 0) {
-          this.sprite.setTint(0x9be7a8);
+        if (
+          (this.slowTimerMs > 0 || this.poisonTimerMs > 0) &&
+          this.activeStatusTint !== null
+        ) {
+          this.sprite.setTint(this.activeStatusTint);
         } else {
           this.sprite.clearTint();
         }
