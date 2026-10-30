@@ -20,7 +20,7 @@ export type Direction8 = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export class PokemonAnimationManager {
   /**
-   * Faz o preload de todos os spritesheets do catálogo na BootScene.
+   * Faz o preload de todos os spritesheets, retratos (Normal e Pain) e sprites de ataque na BootScene.
    */
   static preloadAll(scene: Phaser.Scene): void {
     for (const poke of Object.values(POKEMON_MANIFEST)) {
@@ -32,6 +32,26 @@ export class PokemonAnimationManager {
           frameWidth: cfg.frameWidth,
           frameHeight: cfg.frameHeight,
         });
+      }
+
+      // Preload dos retratos da HUD (Normal e Dor/Pain) do PMD Collab
+      scene.load.image(
+        this.getPortraitKey(poke.id, 'Normal'),
+        `assets/sprites/${poke.id}/Portrait-Normal.png`
+      );
+      if (poke.role !== 'boss') {
+        scene.load.image(
+          this.getPortraitKey(poke.id, 'Pain'),
+          `assets/sprites/${poke.id}/Portrait-Pain.png`
+        );
+      }
+
+      // Preload de sprite estático de ataque caso configurado no manifesto
+      if (poke.attackProfile?.spriteFile) {
+        scene.load.image(
+          this.getAttackSpriteKey(poke.id),
+          poke.attackProfile.spriteFile
+        );
       }
     }
   }
@@ -85,6 +105,17 @@ export class PokemonAnimationManager {
     return `poke-${pokemonId}-${animType}`;
   }
 
+  static getPortraitKey(
+    pokemonId: string,
+    emotion: 'Normal' | 'Pain' = 'Normal'
+  ): string {
+    return `poke-${pokemonId}-portrait-${emotion}`;
+  }
+
+  static getAttackSpriteKey(pokemonId: string): string {
+    return `poke-${pokemonId}-attack-sprite`;
+  }
+
   static getAnimKey(
     pokemonId: string,
     animType: PokemonAnimType,
@@ -119,4 +150,3 @@ export class PokemonAnimationManager {
     return 7; // Baixo-Esquerda (SW)
   }
 }
-

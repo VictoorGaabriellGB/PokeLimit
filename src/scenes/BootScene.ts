@@ -35,7 +35,7 @@ export class BootScene extends Phaser.Scene {
     const cy = GAME_SETTINGS.HEIGHT / 2;
 
     const title = this.add
-      .text(cx, cy - 45, 'Carregando PokéSurvivor...', {
+      .text(cx, cy - 45, 'Carregando PokéLimit...', {
         fontFamily: 'monospace',
         fontSize: '22px',
         color: '#f7d02c',

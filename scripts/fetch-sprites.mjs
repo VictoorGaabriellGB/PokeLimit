@@ -22,8 +22,20 @@ const POKEMON_LIST = [
   { id: '0095', name: 'Onix' },
 ];
 
-const BASE_URL = 'https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/sprite';
+const BASE_URL =
+  'https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/sprite';
+const PORTRAIT_BASE_URL =
+  'https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master/portrait';
 const OUTPUT_DIR = path.resolve('public/assets/sprites');
+
+async function fileExists(p) {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function parseAnimDataXml(xmlText) {
   const anims = {};
@@ -40,11 +52,17 @@ function parseAnimDataXml(xmlText) {
       continue;
     }
 
-    const frameWidth = Number(block.match(/<FrameWidth>(\d+)<\/FrameWidth>/)?.[1] || 32);
-    const frameHeight = Number(block.match(/<FrameHeight>(\d+)<\/FrameHeight>/)?.[1] || 32);
+    const frameWidth = Number(
+      block.match(/<FrameWidth>(\d+)<\/FrameWidth>/)?.[1] || 32
+    );
+    const frameHeight = Number(
+      block.match(/<FrameHeight>(\d+)<\/FrameHeight>/)?.[1] || 32
+    );
     const durationsMatch = block.match(/<Durations>([\s\S]*?)<\/Durations>/);
     const durations = durationsMatch
-      ? [...durationsMatch[1].matchAll(/<Duration>(\d+)<\/Duration>/g)].map((m) => Number(m[1]))
+      ? [...durationsMatch[1].matchAll(/<Duration>(\d+)<\/Duration>/g)].map(
+          (m) => Number(m[1])
+        )
       : [4];
 
     anims[name] = {
@@ -64,26 +82,82 @@ function parseAnimDataXml(xmlText) {
   return anims;
 }
 
+async function downloadPortraits(pokemon, pokeDir) {
+  for (const emotion of ['Normal', 'Pain']) {
+    const outName = `Portrait-${emotion}.png`;
+    const outPath = path.join(pokeDir, outName);
+    if (await fileExists(outPath)) continue;
+
+    const url = `${PORTRAIT_BASE_URL}/${pokemon.id}/${emotion}.png`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const buffer = Buffer.from(await res.arrayBuffer());
+      await fs.writeFile(outPath, buffer);
+      console.log(`  ✓ ${pokemon.name}: ${outName}`);
+    } else if (emotion === 'Pain') {
+      // Fallback para Normal.png caso Pain.png não exista
+      const normalPath = path.join(pokeDir, 'Portrait-Normal.png');
+      if (await fileExists(normalPath)) {
+        await fs.copyFile(normalPath, outPath);
+      }
+    }
+  }
+}
+
 async function downloadPokemon(pokemon) {
   const pokeDir = path.join(OUTPUT_DIR, pokemon.id);
   await fs.mkdir(pokeDir, { recursive: true });
 
-  const xmlUrl = `${BASE_URL}/${pokemon.id}/AnimData.xml`;
-  console.log(`Baixando AnimData.xml de ${pokemon.name} (#${pokemon.id})...`);
-  const xmlRes = await fetch(xmlUrl);
-  if (!xmlRes.ok) {
-    throw new Error(`Falha ao baixar ${xmlUrl}: ${xmlRes.status}`);
+  await downloadPortraits(pokemon, pokeDir);
+
+  const xmlPath = path.join(pokeDir, 'AnimData.xml');
+  let xmlText;
+  if (await fileExists(xmlPath)) {
+    xmlText = await fs.readFile(xmlPath, 'utf-8');
+  } else {
+    const xmlUrl = `${BASE_URL}/${pokemon.id}/AnimData.xml`;
+    console.log(`Baixando AnimData.xml de ${pokemon.name} (#${pokemon.id})...`);
+    const xmlRes = await fetch(xmlUrl);
+    if (!xmlRes.ok) {
+      throw new Error(`Falha ao baixar ${xmlUrl}: ${xmlRes.status}`);
+    }
+    xmlText = await xmlRes.text();
+    await fs.writeFile(xmlPath, xmlText, 'utf-8');
   }
-  const xmlText = await xmlRes.text();
-  await fs.writeFile(path.join(pokeDir, 'AnimData.xml'), xmlText, 'utf-8');
 
   const allAnims = parseAnimDataXml(xmlText);
-  const desiredAnims = ['Walk', 'Idle', 'Attack', 'Strike', 'Shoot', 'Charge', 'Sing', 'Hop'];
+  const desiredAnims = [
+    'Walk',
+    'Idle',
+    'Attack',
+    'Strike',
+    'Shoot',
+    'Charge',
+    'Sing',
+    'Hop',
+  ];
   const downloadedAnims = {};
 
   for (const animName of desiredAnims) {
     if (!allAnims[animName]) continue;
-    if (animName !== 'Walk' && animName !== 'Idle' && downloadedAnims['Attack']) {
+    if (
+      animName !== 'Walk' &&
+      animName !== 'Idle' &&
+      downloadedAnims['Attack']
+    ) {
+      continue;
+    }
+
+    const targetKey =
+      animName === 'Walk' || animName === 'Idle' ? animName : 'Attack';
+    const savedFileName = `${targetKey}-Anim.png`;
+    const savedPath = path.join(pokeDir, savedFileName);
+
+    if (await fileExists(savedPath)) {
+      downloadedAnims[targetKey] = {
+        file: `assets/sprites/${pokemon.id}/${savedFileName}`,
+        ...allAnims[animName],
+      };
       continue;
     }
 
@@ -92,14 +166,12 @@ async function downloadPokemon(pokemon) {
     const imgRes = await fetch(imgUrl);
     if (imgRes.ok) {
       const buffer = Buffer.from(await imgRes.arrayBuffer());
-      const targetKey = animName === 'Walk' || animName === 'Idle' ? animName : 'Attack';
-      const savedFileName = `${targetKey}-Anim.png`;
-      await fs.writeFile(path.join(pokeDir, savedFileName), buffer);
+      await fs.writeFile(savedPath, buffer);
       downloadedAnims[targetKey] = {
         file: `assets/sprites/${pokemon.id}/${savedFileName}`,
         ...allAnims[animName],
       };
-      console.log(`  ✓ ${savedFileName} (${allAnims[animName].frameWidth}x${allAnims[animName].frameHeight}, ${allAnims[animName].frameCount} frames/dir)`);
+      console.log(`  ✓ ${savedFileName}`);
     }
   }
 
@@ -120,7 +192,7 @@ async function main() {
 
   const manifestPath = path.join(OUTPUT_DIR, 'pokemon-manifest.json');
   await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-  console.log(`\nManifesto salvo com sucesso em: ${manifestPath}`);
+  console.log(`\nManifesto e retratos salvos com sucesso!`);
 }
 
 main().catch((err) => {

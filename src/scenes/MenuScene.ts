@@ -178,7 +178,7 @@ export class MenuScene extends Phaser.Scene {
     this.drawPokeballEmblem(54, 46, 20);
 
     this.add
-      .text(86, 24, 'POKÉSURVIVOR', {
+      .text(86, 24, 'POKÉLIMIT', {
         fontFamily: 'monospace',
         fontSize: '28px',
         fontStyle: 'bold',

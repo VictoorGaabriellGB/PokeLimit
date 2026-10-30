@@ -19,6 +19,7 @@ import {
 } from '../entities/Player';
 import { DEPTH } from '../systems/depth';
 import { MapManager } from '../systems/MapManager';
+import { PokemonAnimationManager } from '../systems/PokemonAnimationManager';
 import { RunHistory } from '../systems/RunHistory';
 
 /**
@@ -53,14 +54,24 @@ export class GameScene extends Phaser.Scene {
   private defeatedCount = 0;
   private pendingAbilityPicks = 0;
   private isModalOpen = false;
+  private activeModalType: 'none' | 'ability' | 'pause' | 'gameover' | 'victory' =
+    'none';
   private runSaved = false;
 
-  private hudText!: Phaser.GameObjects.Text;
-  private xpBarFill!: Phaser.GameObjects.Rectangle;
-  private dashBarFill!: Phaser.GameObjects.Rectangle;
+  // Elementos da nova HUD In-Game (estilo imagem anexa)
+  private hudPortraitFrame!: Phaser.GameObjects.Rectangle;
+  private hudPortraitImage!: Phaser.GameObjects.Image;
+  private hpBarFill!: Phaser.GameObjects.Rectangle;
+  private hpLabelText!: Phaser.GameObjects.Text;
   private specialBarFill!: Phaser.GameObjects.Rectangle;
-  private dashLabelText!: Phaser.GameObjects.Text;
   private specialLabelText!: Phaser.GameObjects.Text;
+  private dashBarFill!: Phaser.GameObjects.Rectangle;
+  private dashLabelText!: Phaser.GameObjects.Text;
+  private xpBarFill!: Phaser.GameObjects.Rectangle;
+  private xpLabelText!: Phaser.GameObjects.Text;
+  private centerTimerText!: Phaser.GameObjects.Text;
+  private mapSubStatusText!: Phaser.GameObjects.Text;
+  private rightStatsText!: Phaser.GameObjects.Text;
   private abilitiesSummaryText!: Phaser.GameObjects.Text;
   private bannerText!: Phaser.GameObjects.Text;
   private compassText!: Phaser.GameObjects.Text;
@@ -93,6 +104,7 @@ export class GameScene extends Phaser.Scene {
     this.defeatedCount = 0;
     this.pendingAbilityPicks = 0;
     this.isModalOpen = false;
+    this.activeModalType = 'none';
     this.runSaved = false;
     this.modalContainer = null;
     this.currentModalChoices = [];
@@ -135,14 +147,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
-    if (this.isModalOpen || this.bossDefeated) return;
-
-    if (this.mapManager.getIsTransitioning()) {
-      this.player.sprite.setVelocity(0, 0);
+    if (this.isModalOpen || this.bossDefeated) {
+      this.updateHud();
       return;
     }
 
     if (this.player.isDead) {
+      this.updateHud();
       this.openGameOverModal();
       return;
     }
@@ -163,7 +174,7 @@ export class GameScene extends Phaser.Scene {
     const px = this.player.sprite.x;
     const py = this.player.sprite.y;
 
-    // 1. Tempo do mapa e transição suave por Portal (apenas fora da Arena do Boss)
+    // 1. Tempo do mapa e transição conectada suave com pontezinha (apenas antes da Arena Boss)
     if (!this.mapManager.isBossMapActive()) {
       if (!this.mapManager.isNextMapGateOpen()) {
         this.mapElapsedSeconds += dtSeconds;
@@ -172,18 +183,10 @@ export class GameScene extends Phaser.Scene {
         }
         this.compassText.setVisible(false);
       } else {
-        const triggered = this.mapManager.checkPlayerEnteredPortal(
-          px,
-          py,
-          (newMapDef, newSpawnPos, enteredBossArena) => {
-            this.onMapSwapCompleted(
-              newMapDef.name,
-              newSpawnPos,
-              enteredBossArena
-            );
-          }
-        );
-        if (!triggered) {
+        const enteredMapDef = this.mapManager.checkPlayerEnteredNextMap(px, py);
+        if (enteredMapDef) {
+          this.onPlayerCompletedMapTransition(enteredMapDef.name);
+        } else {
           this.updateCompassIndicator(px, py);
         }
       }
@@ -191,13 +194,13 @@ export class GameScene extends Phaser.Scene {
       this.compassText.setVisible(false);
     }
 
-    // 2. Spawner de inimigos (na Arena do Boss, nascem menos lacaios para focar no Onix)
+    // 2. Spawner de inimigos (na arena do Boss, o foco é o duelo com o Onix + poucos lacaios)
     this.spawnTimerMs += delta;
-    const isBossArena = this.mapManager.isBossMapActive();
-    const maxEnemies = isBossArena
-      ? 7
+    const isBossActive = Boolean(this.bossEnemy && !this.bossEnemy.isDead);
+    const maxEnemies = isBossActive
+      ? 5
       : Math.min(26, 16 + Math.floor(this.runTimeSeconds / 30) * 2);
-    const spawnInterval = isBossArena ? 4200 : 2000;
+    const spawnInterval = isBossActive ? 5200 : 2000;
 
     if (this.spawnTimerMs >= spawnInterval && this.enemies.length < maxEnemies) {
       this.spawnTimerMs = 0;
@@ -258,7 +261,7 @@ export class GameScene extends Phaser.Scene {
       !this.bossEncounterStarted &&
       !this.isModalOpen
     ) {
-      // Assim que o jogador atinge o nível máximo (Nv.10) e escolhe sua última habilidade, inicia o Boss Onix!
+      // Assim que o jogador atinge o nível 10, teleporta para a arena do map5-BOSS!
       this.triggerBossArenaTransition();
     }
 
@@ -329,43 +332,32 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  // ===================== BOSS ONIX & VITÓRIA =====================
+  // ===================== TELEPORTE NÍVEL 10 -> ARENA BOSS ONIX =====================
 
   private triggerBossArenaTransition(): void {
     if (this.bossEncounterStarted) return;
     this.bossEncounterStarted = true;
 
-    if (this.mapManager.isBossMapActive()) {
-      this.spawnBossOnix();
-      return;
-    }
+    // Limpa inimigos e orbes dos mapas anteriores
+    this.clearAllActiveEnemiesAndOrbs();
+    this.compassText.setVisible(false);
 
-    this.showBanner(
-      `🔥 NÍVEL MÁXIMO (${MAX_PLAYER_LEVEL}) ALCANÇADO! ENTRANDO NA ARENA DO BOSS ONIX...`
-    );
+    // Teleporta para o map5-BOSS na arena fechada
+    const { playerSpawn, bossSpawn } = this.mapManager.teleportToBossArena();
+    this.player.teleportTo(playerSpawn.x, playerSpawn.y);
+    this.cameras.main.flash(380, 255, 255, 255);
 
-    this.mapManager.transitionToBossArena((bossMapDef, spawnPos) => {
-      this.onMapSwapCompleted(bossMapDef.name, spawnPos, true);
-    });
+    this.spawnBossOnix(bossSpawn.x, bossSpawn.y);
   }
 
-  private spawnBossOnix(): void {
+  private spawnBossOnix(bossX: number, bossY: number): void {
     if (this.bossEnemy && !this.bossEnemy.isDead) return;
-
-    this.bossEncounterStarted = true;
-    const bounds = this.mapManager.getCurrentMapBounds();
-    const rawBossX = bounds.x + bounds.width * 0.5;
-    const rawBossY = bounds.y + bounds.height * 0.44;
-    const safeBossPos = this.mapManager.findNearestWalkablePosition(
-      rawBossX,
-      rawBossY
-    );
 
     const hpMultiplier = 1 + (this.player.level - 1) * 0.12;
     this.bossEnemy = new Enemy(
       this,
-      safeBossPos.x,
-      safeBossPos.y,
+      bossX,
+      bossY,
       BOSS_ID,
       hpMultiplier
     );
@@ -375,12 +367,12 @@ export class GameScene extends Phaser.Scene {
     // Cura parcial para o confronto final
     this.player.hp = Math.min(
       this.player.maxHp,
-      this.player.hp + Math.round(this.player.maxHp * 0.45)
+      this.player.hp + Math.round(this.player.maxHp * 0.5)
     );
 
     this.cameras.main.shake(420, 0.008);
     this.bossHudContainer.setVisible(true);
-    this.showBanner('👑 DESAFIO FINAL: DERROTE O BOSS ONIX PARA VENCER!');
+    this.showBanner('👑 ARENA FINAL! DERROTE O BOSS ONIX PARA VENCER!');
   }
 
   private onBossDefeated(): void {
@@ -388,7 +380,6 @@ export class GameScene extends Phaser.Scene {
     this.bossDefeated = true;
     this.bossHudContainer.setVisible(false);
 
-    // Elimina lacaios restantes e orbes
     this.clearAllActiveEnemiesAndOrbs();
     this.cameras.main.shake(500, 0.01);
     this.cameras.main.flash(450, 255, 230, 120);
@@ -396,8 +387,174 @@ export class GameScene extends Phaser.Scene {
     this.openVictoryModal();
   }
 
+  // ===================== MENU DE PAUSA [ESC] (3 OPÇÕES) =====================
+
+  private openPauseModal(): void {
+    if (this.isModalOpen || this.player.isDead || this.bossDefeated) return;
+
+    this.isModalOpen = true;
+    this.activeModalType = 'pause';
+    this.physics.world.pause();
+
+    const center = this.toZoomedHudCoord(
+      GAME_SETTINGS.WIDTH / 2,
+      GAME_SETTINGS.HEIGHT / 2
+    );
+
+    const container = this.add
+      .container(center.x, center.y)
+      .setScrollFactor(0)
+      .setScale(center.scale)
+      .setDepth(DEPTH.HUD + 70);
+
+    const dim = this.add.rectangle(
+      0,
+      0,
+      GAME_SETTINGS.WIDTH,
+      GAME_SETTINGS.HEIGHT,
+      0x030712,
+      0.82
+    );
+
+    const box = this.add
+      .rectangle(0, 0, 500, 340, 0x0b1528, 0.98)
+      .setStrokeStyle(4, 0xffcb05, 1);
+
+    const innerBorder = this.add
+      .rectangle(0, 0, 486, 326, 0x000000, 0)
+      .setStrokeStyle(1.5, 0x38bdf8, 0.5);
+
+    const title = this.add
+      .text(0, -122, '⏸️ JOGO PAUSADO', {
+        fontFamily: 'monospace',
+        fontSize: '26px',
+        fontStyle: 'bold',
+        color: '#ffcb05',
+        stroke: '#000000',
+        strokeThickness: 5,
+      })
+      .setOrigin(0.5);
+
+    const poke = this.player.getPokemonDefinition();
+    const subtitle = this.add
+      .text(
+        0,
+        -86,
+        `${poke.name} (Nv.${this.player.level})  •  Tempo: ${RunHistory.formatTime(this.runTimeSeconds)}  •  Derrotados: ${this.defeatedCount}`,
+        {
+          fontFamily: 'monospace',
+          fontSize: '13px',
+          color: '#cbd5e1',
+        }
+      )
+      .setOrigin(0.5);
+
+    const createOptionBtn = (
+      y: number,
+      label: string,
+      bgHex: string,
+      textHex: string,
+      strokeColor: number,
+      onClick: () => void
+    ) => {
+      const btnBg = this.add
+        .rectangle(0, y, 410, 48, Phaser.Display.Color.HexStringToColor(bgHex).color, 0.96)
+        .setStrokeStyle(2.5, strokeColor, 1)
+        .setInteractive({ useHandCursor: true });
+
+      const btnTxt = this.add
+        .text(0, y, label, {
+          fontFamily: 'monospace',
+          fontSize: '15.5px',
+          fontStyle: 'bold',
+          color: textHex,
+        })
+        .setOrigin(0.5);
+
+      btnBg.on('pointerover', () => {
+        btnBg.setStrokeStyle(4, 0xffffff, 1);
+        btnBg.setScale(1.02);
+      });
+      btnBg.on('pointerout', () => {
+        btnBg.setStrokeStyle(2.5, strokeColor, 1);
+        btnBg.setScale(1);
+      });
+      btnBg.on('pointerdown', onClick);
+
+      return [btnBg, btnTxt];
+    };
+
+    // 1. Retomar o jogo
+    const resumeBtn = createOptionBtn(
+      -22,
+      '▶️  RETOMAR AO JOGO [ESC / ENTER]',
+      '#22c55e',
+      '#052e16',
+      0x86efac,
+      () => this.resumeFromPauseModal()
+    );
+
+    // 2. Reiniciar a run com o mesmo Pokémon inicial
+    const restartBtn = createOptionBtn(
+      42,
+      '🔄  REINICIAR A RUN (MESMO POKÉMON) [R]',
+      '#38bdf8',
+      '#082f49',
+      0xbae6fd,
+      () => this.restartRunSamePokemon()
+    );
+
+    // 3. Voltar ao menu principal para escolher outro Pokémon
+    const menuBtn = createOptionBtn(
+      106,
+      '🏠  VOLTAR AO MENU DE POKÉMONS [Q]',
+      '#f59e0b',
+      '#091326',
+      0xfde047,
+      () => this.returnToMainMenu()
+    );
+
+    container.add([
+      dim,
+      box,
+      innerBorder,
+      title,
+      subtitle,
+      ...resumeBtn,
+      ...restartBtn,
+      ...menuBtn,
+    ]);
+
+    this.modalContainer = container;
+  }
+
+  private resumeFromPauseModal(): void {
+    if (this.activeModalType !== 'pause') return;
+    if (this.modalContainer) {
+      this.modalContainer.destroy();
+      this.modalContainer = null;
+    }
+    this.isModalOpen = false;
+    this.activeModalType = 'none';
+    this.physics.world.resume();
+  }
+
+  private restartRunSamePokemon(): void {
+    this.saveCurrentRunIfEligible('abandono');
+    if (this.modalContainer) {
+      this.modalContainer.destroy();
+      this.modalContainer = null;
+    }
+    this.isModalOpen = false;
+    this.activeModalType = 'none';
+    this.scene.restart({ pokemonId: this.selectedPokemonId });
+  }
+
+  // ===================== MODAL DE VITÓRIA =====================
+
   private openVictoryModal(): void {
     this.isModalOpen = true;
+    this.activeModalType = 'victory';
     this.physics.world.pause();
 
     const isNewRecord = this.saveCurrentRunIfEligible('vitoria');
@@ -501,6 +658,7 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.isModalOpen = true;
+    this.activeModalType = 'ability';
     this.currentModalChoices = choices;
     this.physics.world.pause();
 
@@ -666,7 +824,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private selectModalAbility(id: AbilityId): void {
-    if (!this.isModalOpen) return;
+    if (!this.isModalOpen || this.activeModalType !== 'ability') return;
 
     this.player.learnAbility(id);
     this.pendingAbilityPicks = Math.max(0, this.pendingAbilityPicks - 1);
@@ -676,6 +834,7 @@ export class GameScene extends Phaser.Scene {
       this.modalContainer = null;
     }
     this.isModalOpen = false;
+    this.activeModalType = 'none';
     this.currentModalChoices = [];
 
     const def = ABILITIES[id];
@@ -741,6 +900,7 @@ export class GameScene extends Phaser.Scene {
   private openGameOverModal(): void {
     if (this.isModalOpen) return;
     this.isModalOpen = true;
+    this.activeModalType = 'gameover';
     this.physics.world.pause();
 
     const isNewRecord = this.saveCurrentRunIfEligible('derrota');
@@ -769,11 +929,11 @@ export class GameScene extends Phaser.Scene {
     );
 
     const box = this.add
-      .rectangle(0, 0, 520, 340, 0x0b1528, 0.98)
+      .rectangle(0, 0, 520, 360, 0x0b1528, 0.98)
       .setStrokeStyle(4, 0xe63946, 1);
 
     const title = this.add
-      .text(0, -120, '💀 FIM DA JORNADA', {
+      .text(0, -130, '💀 FIM DA JORNADA', {
         fontFamily: 'monospace',
         fontSize: '28px',
         fontStyle: 'bold',
@@ -784,7 +944,7 @@ export class GameScene extends Phaser.Scene {
     const statsTxt = this.add
       .text(
         0,
-        -15,
+        -25,
         [
           `Pokémon Final: ${poke.name} (Nível ${this.player.level})`,
           `Pontuação Final: ${score} pts ${isNewRecord ? '🏆 (NOVO RECORDE!)' : ''}`,
@@ -802,30 +962,47 @@ export class GameScene extends Phaser.Scene {
       )
       .setOrigin(0.5);
 
-    const btn = this.add
-      .text(0, 112, '🏠 VOLTAR À TELA INICIAL [ENTER / ESC]', {
+    const retryBtn = this.add
+      .text(0, 82, '🔄 REINICIAR COM O MESMO POKÉMON [R]', {
         fontFamily: 'monospace',
-        fontSize: '16px',
+        fontSize: '14.5px',
+        fontStyle: 'bold',
+        color: '#082f49',
+        backgroundColor: '#38bdf8',
+        padding: { x: 16, y: 8 },
+      })
+      .setOrigin(0.5)
+      .setInteractive({ useHandCursor: true });
+
+    retryBtn.on('pointerdown', () =>
+      this.scene.restart({ pokemonId: this.selectedPokemonId })
+    );
+
+    const btn = this.add
+      .text(0, 132, '🏠 VOLTAR AO MENU DE POKÉMONS [ENTER / ESC]', {
+        fontFamily: 'monospace',
+        fontSize: '15px',
         fontStyle: 'bold',
         color: '#091326',
         backgroundColor: '#ffcb05',
-        padding: { x: 18, y: 10 },
+        padding: { x: 18, y: 9 },
       })
       .setOrigin(0.5)
       .setInteractive({ useHandCursor: true });
 
     btn.on('pointerdown', () => this.scene.start('MenuScene'));
 
-    container.add([dim, box, title, statsTxt, btn]);
+    container.add([dim, box, title, statsTxt, retryBtn, btn]);
     this.modalContainer = container;
   }
 
   // ===================== MAPA & SPAWN =====================
 
   private openNextMapPassage(): void {
+    if (this.mapManager.isBossMapActive()) return;
     const nextDef = this.mapManager.spawnNextConnectedMap();
     this.showBanner(
-      `🌀 Portal aberto ao NORTE para: ${nextDef.name}! Entre no portal!`
+      `🌉 Pontezinha aberta ao NORTE para: ${nextDef.name}!`
     );
   }
 
@@ -843,23 +1020,28 @@ export class GameScene extends Phaser.Scene {
     this.xpOrbs = [];
   }
 
-  private onMapSwapCompleted(
-    newMapName: string,
-    newSpawnPos: { x: number; y: number },
-    enteredBossArena: boolean
-  ): void {
+  private onPlayerCompletedMapTransition(newMapName: string): void {
     this.mapElapsedSeconds = 0;
     this.compassText.setVisible(false);
 
-    this.clearAllActiveEnemiesAndOrbs();
-    this.player.sprite.setPosition(newSpawnPos.x, newSpawnPos.y);
-    this.player.sprite.setVelocity(0, 0);
+    const bounds = this.mapManager.getCurrentMapBounds();
+    this.enemies = this.enemies.filter((enemy) => {
+      if (enemy.isDead) return false;
+      if (enemy.isBoss) return true;
+      const insideNewMap =
+        enemy.sprite.x >= bounds.x &&
+        enemy.sprite.x <= bounds.x + bounds.width &&
+        enemy.sprite.y >= bounds.y &&
+        enemy.sprite.y <= bounds.y + bounds.height;
 
-    if (enteredBossArena) {
-      this.spawnBossOnix();
-    } else {
-      this.showBanner(`📍 Você chegou em: ${newMapName}`);
-    }
+      if (!insideNewMap) {
+        enemy.destroy();
+        return false;
+      }
+      return true;
+    });
+
+    this.showBanner(`📍 Você chegou em: ${newMapName}`);
   }
 
   private updateCompassIndicator(px: number, py: number): void {
@@ -882,7 +1064,9 @@ export class GameScene extends Phaser.Scene {
     this.compassText.setVisible(true);
     this.compassText.setPosition(px, py - 40);
     this.compassText.setText(
-      `${arrow} PORTAL NORTE (${Math.max(0, Math.round(dist / 24))}m)`
+      target.passedSeam
+        ? `⬆️ ATRAVESSE A PONTE (${Math.max(1, Math.round(dist / 24))}m)`
+        : `${arrow} PONTE AO NORTE (${Math.max(0, Math.round(dist / 24))}m)`
     );
   }
 
@@ -925,29 +1109,57 @@ export class GameScene extends Phaser.Scene {
     kb.on('keydown-ESC', () => {
       if (this.bossDefeated || this.player.isDead) {
         this.scene.start('MenuScene');
-      } else {
-        this.returnToMainMenu();
+      } else if (this.activeModalType === 'pause') {
+        this.resumeFromPauseModal();
+      } else if (!this.isModalOpen) {
+        this.openPauseModal();
       }
     });
 
     kb.on('keydown-ENTER', () => {
       if (this.player.isDead || this.bossDefeated) {
         this.scene.start('MenuScene');
+      } else if (this.activeModalType === 'pause') {
+        this.resumeFromPauseModal();
+      }
+    });
+
+    kb.on('keydown-R', () => {
+      if (
+        this.activeModalType === 'pause' ||
+        this.activeModalType === 'gameover'
+      ) {
+        this.restartRunSamePokemon();
+      }
+    });
+
+    kb.on('keydown-Q', () => {
+      if (this.activeModalType === 'pause') {
+        this.returnToMainMenu();
       }
     });
 
     kb.on('keydown-ONE', () => {
-      if (this.isModalOpen && this.currentModalChoices[0]) {
+      if (
+        this.activeModalType === 'ability' &&
+        this.currentModalChoices[0]
+      ) {
         this.selectModalAbility(this.currentModalChoices[0].id);
       }
     });
     kb.on('keydown-TWO', () => {
-      if (this.isModalOpen && this.currentModalChoices[1]) {
+      if (
+        this.activeModalType === 'ability' &&
+        this.currentModalChoices[1]
+      ) {
         this.selectModalAbility(this.currentModalChoices[1].id);
       }
     });
     kb.on('keydown-THREE', () => {
-      if (this.isModalOpen && this.currentModalChoices[2]) {
+      if (
+        this.activeModalType === 'ability' &&
+        this.currentModalChoices[2]
+      ) {
         this.selectModalAbility(this.currentModalChoices[2].id);
       }
     });
@@ -975,7 +1187,7 @@ export class GameScene extends Phaser.Scene {
     this.scene.start('MenuScene');
   }
 
-  // ===================== HUD =====================
+  // ===================== HUD IN-GAME (ESTILO IMAGEM ANEXA) =====================
 
   private toZoomedHudCoord(
     screenX: number,
@@ -991,117 +1203,233 @@ export class GameScene extends Phaser.Scene {
   }
 
   private createHud(): void {
-    const topLeft = this.toZoomedHudCoord(14, 12);
-    this.hudText = this.add
-      .text(topLeft.x, topLeft.y, '', {
-        fontFamily: 'monospace',
-        fontSize: '13px',
-        color: '#ffffff',
-        backgroundColor: '#091326dd',
-        padding: { x: 12, y: 7 },
-        lineSpacing: 3,
-      })
+    // 1. Retrato do Pokémon (canto superior esquerdo) com moldura branca estilo PMD
+    const portraitPos = this.toZoomedHudCoord(46, 46);
+    this.hudPortraitFrame = this.add
+      .rectangle(portraitPos.x, portraitPos.y, 70, 70, 0x0b1528, 0.95)
+      .setStrokeStyle(3, 0xffffff, 1)
       .setScrollFactor(0)
-      .setScale(topLeft.scale)
+      .setScale(portraitPos.scale)
       .setDepth(DEPTH.HUD);
 
-    // Barra de XP
-    const xpBarPos = this.toZoomedHudCoord(14, 84);
+    const initialPortraitKey = PokemonAnimationManager.getPortraitKey(
+      this.player.getPokemonDefinition().id,
+      'Normal'
+    );
+    this.hudPortraitImage = this.add
+      .image(portraitPos.x, portraitPos.y, initialPortraitKey)
+      .setDisplaySize(64, 64)
+      .setScrollFactor(0)
+      .setScale(portraitPos.scale * (64 / 40))
+      .setDepth(DEPTH.HUD + 1);
+
+    // 2. Barra de HP verde grande (70 / 70)
+    const hpBarPos = this.toZoomedHudCoord(88, 22);
     this.add
-      .rectangle(xpBarPos.x, xpBarPos.y, 460, 11, 0x091326, 0.92)
+      .rectangle(hpBarPos.x, hpBarPos.y, 198, 22, 0x111c14, 0.88)
       .setOrigin(0, 0.5)
-      .setStrokeStyle(1.5, 0x38bdf8, 0.9)
+      .setStrokeStyle(1.5, 0x1f2937, 0.9)
+      .setScrollFactor(0)
+      .setScale(hpBarPos.scale)
+      .setDepth(DEPTH.HUD);
+
+    this.hpBarFill = this.add
+      .rectangle(hpBarPos.x, hpBarPos.y, 198, 22, 0x65d643, 1)
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setScale(hpBarPos.scale)
+      .setDepth(DEPTH.HUD + 1);
+
+    const hpTextPos = this.toZoomedHudCoord(96, 22);
+    this.hpLabelText = this.add
+      .text(hpTextPos.x, hpTextPos.y, '', {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setScale(hpTextPos.scale)
+      .setDepth(DEPTH.HUD + 2);
+
+    // 3. Barra de ULT (Especial) roxa/escura (ULT 11%)
+    const ultBarPos = this.toZoomedHudCoord(88, 49);
+    this.add
+      .rectangle(ultBarPos.x, ultBarPos.y, 198, 17, 0x0d1512, 0.92)
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setScale(ultBarPos.scale)
+      .setDepth(DEPTH.HUD);
+
+    this.specialBarFill = this.add
+      .rectangle(ultBarPos.x, ultBarPos.y, 0, 17, 0x9b6dff, 1)
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setScale(ultBarPos.scale)
+      .setDepth(DEPTH.HUD + 1);
+
+    const ultTextPos = this.toZoomedHudCoord(96, 49);
+    this.specialLabelText = this.add
+      .text(ultTextPos.x, ultTextPos.y, '', {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setScale(ultTextPos.scale)
+      .setDepth(DEPTH.HUD + 2);
+
+    // 4. Barra de DASH azul-clara (DASH [SHIFT])
+    const dashBarPos = this.toZoomedHudCoord(88, 70);
+    this.add
+      .rectangle(dashBarPos.x, dashBarPos.y, 198, 16, 0x0d1512, 0.92)
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setScale(dashBarPos.scale)
+      .setDepth(DEPTH.HUD);
+
+    this.dashBarFill = this.add
+      .rectangle(dashBarPos.x, dashBarPos.y, 198, 16, 0x56b9ff, 1)
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setScale(dashBarPos.scale)
+      .setDepth(DEPTH.HUD + 1);
+
+    const dashTextPos = this.toZoomedHudCoord(96, 70);
+    this.dashLabelText = this.add
+      .text(dashTextPos.x, dashTextPos.y, '', {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 3,
+      })
+      .setOrigin(0, 0.5)
+      .setScrollFactor(0)
+      .setScale(dashTextPos.scale)
+      .setDepth(DEPTH.HUD + 2);
+
+    // 5. Barra compacta de Nível & XP logo abaixo do bloco principal
+    const xpBarPos = this.toZoomedHudCoord(12, 92);
+    this.add
+      .rectangle(xpBarPos.x, xpBarPos.y, 274, 12, 0x091326, 0.9)
+      .setOrigin(0, 0.5)
+      .setStrokeStyle(1, 0x38bdf8, 0.8)
       .setScrollFactor(0)
       .setScale(xpBarPos.scale)
       .setDepth(DEPTH.HUD);
 
     this.xpBarFill = this.add
-      .rectangle(xpBarPos.x + 2, xpBarPos.y, 0, 7, 0x38bdf8, 1)
+      .rectangle(xpBarPos.x + 1, xpBarPos.y, 0, 10, 0xfacc15, 1)
       .setOrigin(0, 0.5)
       .setScrollFactor(0)
       .setScale(xpBarPos.scale)
       .setDepth(DEPTH.HUD + 1);
 
-    // Barra de Esquiva (Dash - 2s recarga)
-    const dashPos = this.toZoomedHudCoord(14, 104);
-    this.add
-      .rectangle(dashPos.x, dashPos.y, 222, 16, 0x091326, 0.92)
-      .setOrigin(0, 0.5)
-      .setStrokeStyle(1.5, 0x4ade80, 0.9)
-      .setScrollFactor(0)
-      .setScale(dashPos.scale)
-      .setDepth(DEPTH.HUD);
-
-    this.dashBarFill = this.add
-      .rectangle(dashPos.x + 2, dashPos.y, 218, 12, 0x4ade80, 0.85)
-      .setOrigin(0, 0.5)
-      .setScrollFactor(0)
-      .setScale(dashPos.scale)
-      .setDepth(DEPTH.HUD + 1);
-
-    const dashLblPos = this.toZoomedHudCoord(22, 104);
-    this.dashLabelText = this.add
-      .text(dashLblPos.x, dashLblPos.y, '', {
+    const xpTextPos = this.toZoomedHudCoord(18, 92);
+    this.xpLabelText = this.add
+      .text(xpTextPos.x, xpTextPos.y, '', {
         fontFamily: 'monospace',
-        fontSize: '11px',
+        fontSize: '10.5px',
         fontStyle: 'bold',
         color: '#ffffff',
         stroke: '#000000',
-        strokeThickness: 2,
+        strokeThickness: 2.5,
       })
       .setOrigin(0, 0.5)
       .setScrollFactor(0)
-      .setScale(dashLblPos.scale)
-      .setDepth(DEPTH.HUD + 2);
-
-    // Barra de Especial [E / Q]
-    const specPos = this.toZoomedHudCoord(248, 104);
-    this.add
-      .rectangle(specPos.x, specPos.y, 226, 16, 0x091326, 0.92)
-      .setOrigin(0, 0.5)
-      .setStrokeStyle(1.5, 0xf59e0b, 0.9)
-      .setScrollFactor(0)
-      .setScale(specPos.scale)
-      .setDepth(DEPTH.HUD);
-
-    this.specialBarFill = this.add
-      .rectangle(specPos.x + 2, specPos.y, 0, 12, 0xf59e0b, 0.9)
-      .setOrigin(0, 0.5)
-      .setScrollFactor(0)
-      .setScale(specPos.scale)
-      .setDepth(DEPTH.HUD + 1);
-
-    const specLblPos = this.toZoomedHudCoord(256, 104);
-    this.specialLabelText = this.add
-      .text(specLblPos.x, specLblPos.y, '', {
-        fontFamily: 'monospace',
-        fontSize: '11px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-        stroke: '#000000',
-        strokeThickness: 2,
-      })
-      .setOrigin(0, 0.5)
-      .setScrollFactor(0)
-      .setScale(specLblPos.scale)
+      .setScale(xpTextPos.scale)
       .setDepth(DEPTH.HUD + 2);
 
     // Lista compacta de Habilidades Aprendidas
-    const abilPos = this.toZoomedHudCoord(14, 124);
+    const abilPos = this.toZoomedHudCoord(12, 110);
     this.abilitiesSummaryText = this.add
       .text(abilPos.x, abilPos.y, '', {
         fontFamily: 'monospace',
-        fontSize: '12px',
+        fontSize: '11px',
         color: '#fde047',
         backgroundColor: '#091326cc',
-        padding: { x: 8, y: 3 },
+        padding: { x: 6, y: 2 },
       })
       .setScrollFactor(0)
       .setScale(abilPos.scale)
       .setDepth(DEPTH.HUD);
 
-    // Barra de Vida do Boss Onix (centralizada no topo-inferior do HUD)
-    const bossHudPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH / 2, 62);
+    // 6. Relógio Central (00:03) estilo imagem anexa
+    const centerPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH / 2, 28);
+    this.centerTimerText = this.add
+      .text(centerPos.x, centerPos.y, '00:00', {
+        fontFamily: 'monospace',
+        fontSize: '22px',
+        color: '#ffffff',
+        backgroundColor: '#0a140acc',
+        padding: { x: 14, y: 6 },
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setScale(centerPos.scale)
+      .setDepth(DEPTH.HUD);
+
+    const subMapPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH / 2, 56);
+    this.mapSubStatusText = this.add
+      .text(subMapPos.x, subMapPos.y, '', {
+        fontFamily: 'monospace',
+        fontSize: '11.5px',
+        color: '#e2e8f0',
+        backgroundColor: '#0a140ab3',
+        padding: { x: 8, y: 2 },
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setScale(subMapPos.scale)
+      .setDepth(DEPTH.HUD);
+
+    // 7. Painel Superior Direito ("Derrotados: X   Inimigos: Y") estilo imagem anexa
+    const rightPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH - 14, 26);
+    this.rightStatsText = this.add
+      .text(rightPos.x, rightPos.y, 'Derrotados: 0   Inimigos: 0', {
+        fontFamily: 'monospace',
+        fontSize: '15px',
+        color: '#ffffff',
+        backgroundColor: '#0a140acc',
+        padding: { x: 14, y: 7 },
+      })
+      .setOrigin(1, 0.5)
+      .setScrollFactor(0)
+      .setScale(rightPos.scale)
+      .setDepth(DEPTH.HUD);
+
+    // Botão discreto de Pausa [ESC] abaixo do contador direito
+    const pauseBtnPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH - 14, 56);
+    const pauseBtn = this.add
+      .text(pauseBtnPos.x, pauseBtnPos.y, '⏸️ PAUSAR [ESC]', {
+        fontFamily: 'monospace',
+        fontSize: '11.5px',
+        fontStyle: 'bold',
+        color: '#ffcb05',
+        backgroundColor: '#0a140acc',
+        padding: { x: 8, y: 4 },
+      })
+      .setOrigin(1, 0.5)
+      .setScrollFactor(0)
+      .setScale(pauseBtnPos.scale)
+      .setDepth(DEPTH.HUD)
+      .setInteractive({ useHandCursor: true });
+
+    pauseBtn.on('pointerdown', () => {
+      if (!this.isModalOpen) this.openPauseModal();
+    });
+
+    // Barra de Vida do Boss Onix (centralizada no topo quando na Arena Final)
+    const bossHudPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH / 2, 86);
     this.bossHudContainer = this.add
       .container(bossHudPos.x, bossHudPos.y)
       .setScrollFactor(0)
@@ -1130,30 +1458,11 @@ export class GameScene extends Phaser.Scene {
 
     this.bossHudContainer.add([bossBarBg, this.bossHpBarFill, this.bossHpText]);
 
-    // Botão de voltar ao Menu Inicial
-    const menuBtnPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH - 16, 28);
-    const menuBtn = this.add
-      .text(menuBtnPos.x, menuBtnPos.y, '🏠 SALVAR & VOLTAR AO MENU [ESC]', {
-        fontFamily: 'monospace',
-        fontSize: '13.5px',
-        fontStyle: 'bold',
-        color: '#091326',
-        backgroundColor: '#ffcb05',
-        padding: { x: 12, y: 7 },
-      })
-      .setOrigin(1, 0.5)
-      .setScrollFactor(0)
-      .setScale(menuBtnPos.scale)
-      .setDepth(DEPTH.HUD + 2)
-      .setInteractive({ useHandCursor: true });
-
-    menuBtn.on('pointerdown', () => this.returnToMainMenu());
-
-    const bannerPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH / 2, 156);
+    const bannerPos = this.toZoomedHudCoord(GAME_SETTINGS.WIDTH / 2, 128);
     this.bannerText = this.add
       .text(bannerPos.x, bannerPos.y, '', {
         fontFamily: 'monospace',
-        fontSize: '16px',
+        fontSize: '15.5px',
         fontStyle: 'bold',
         color: '#ffcb05',
         backgroundColor: '#091326ee',
@@ -1182,43 +1491,78 @@ export class GameScene extends Phaser.Scene {
   private updateHud(): void {
     const mapDef = this.mapManager.getCurrentMapDefinition();
     const pokeDef = this.player.getPokemonDefinition();
-    const classDef = this.player.getClassDefinition();
-    const specDef = this.player.getSpecialDefinition();
 
-    let mapStatusText: string;
-    if (this.mapManager.isBossMapActive()) {
-      mapStatusText = '👑 CONFRONTO FINAL: DERROTE ONIX!';
-    } else if (this.mapManager.isNextMapGateOpen()) {
-      mapStatusText = '🌀 PORTAL ABERTO AO NORTE!';
-    } else {
-      const remaining = Math.max(
-        0,
-        Math.ceil(GAME_SETTINGS.MAP_DURATION_SECONDS - this.mapElapsedSeconds)
-      );
-      mapStatusText = `⏳ Próximo mapa: ${remaining}s [M]`;
+    // 1. Atualiza o Retrato (Normal vs Dor quando leva dano, e acompanha evoluções!)
+    const inPain = this.player.isInPain();
+    const desiredPortraitKey = PokemonAnimationManager.getPortraitKey(
+      pokeDef.id,
+      inPain ? 'Pain' : 'Normal'
+    );
+    const fallbackPortraitKey = PokemonAnimationManager.getPortraitKey(
+      pokeDef.id,
+      'Normal'
+    );
+    const keyToUse = this.textures.exists(desiredPortraitKey)
+      ? desiredPortraitKey
+      : fallbackPortraitKey;
+
+    if (this.hudPortraitImage.texture.key !== keyToUse) {
+      this.hudPortraitImage.setTexture(keyToUse);
     }
-
-    const nextEvoInfo =
-      pokeDef.evolvesToId && pokeDef.evolveAtLevel
-        ? ` (Evolui Nv.${pokeDef.evolveAtLevel})`
-        : ' (Máx)';
-
-    const timeStr = RunHistory.formatTime(this.runTimeSeconds);
-    const score = this.computeCurrentScore();
-
-    const xpStatus =
-      this.player.level >= MAX_PLAYER_LEVEL
-        ? `✨ NÍVEL MÁXIMO (${MAX_PLAYER_LEVEL}/${MAX_PLAYER_LEVEL})`
-        : `✨ XP: ${this.player.xp}/${this.player.xpToNextLevel} (Boss no Nv.${MAX_PLAYER_LEVEL})`;
-
-    this.hudText.setText(
-      [
-        `🗺️ ${mapDef.name}  |  ${mapStatusText}  |  ⏱️ ${timeStr}  |  🏆 ${score} pts`,
-        `${classDef.iconSymbol} ${pokeDef.name} Nv.${this.player.level}${nextEvoInfo} [${classDef.title}]  |  ❤️ HP: ${this.player.hp}/${this.player.maxHp}  |  💀 ${this.defeatedCount}`,
-        `${xpStatus}  |  ⚔️ Básico: ${pokeDef.attackProfile?.name}`,
-      ].join('\n')
+    this.hudPortraitFrame.setStrokeStyle(
+      3,
+      inPain ? 0xff4d4d : 0xffffff,
+      1
     );
 
+    // 2. Barra de HP ("70 / 70")
+    const hpRatio = Phaser.Math.Clamp(
+      this.player.hp / Math.max(1, this.player.maxHp),
+      0,
+      1
+    );
+    this.hpBarFill.width = 198 * hpRatio;
+    this.hpBarFill.setFillStyle(
+      hpRatio > 0.5 ? 0x65d643 : hpRatio > 0.25 ? 0xfacc15 : 0xef4444,
+      1
+    );
+    this.hpLabelText.setText(`${this.player.hp} / ${this.player.maxHp}`);
+
+    // 3. Barra de ULT ("ULT 11%" ou "ULT PRONTO! [E/Q]")
+    const specRatio = Phaser.Math.Clamp(
+      this.player.specialEnergy / SPECIAL_MAX_ENERGY,
+      0,
+      1
+    );
+    this.specialBarFill.width = 198 * specRatio;
+    this.specialBarFill.setFillStyle(
+      specRatio >= 1 ? 0xc084fc : 0x9b6dff,
+      1
+    );
+    this.specialLabelText.setText(
+      specRatio >= 1
+        ? 'ULT 100% [E/Q]'
+        : `ULT ${Math.floor(specRatio * 100)}%`
+    );
+
+    // 4. Barra de DASH ("DASH  [SHIFT]")
+    const dashReadyRatio = Phaser.Math.Clamp(
+      1 - this.player.dashCooldownRemaining / DASH_COOLDOWN_MS,
+      0,
+      1
+    );
+    this.dashBarFill.width = 198 * dashReadyRatio;
+    this.dashBarFill.setFillStyle(
+      dashReadyRatio >= 1 ? 0x56b9ff : 0x38bdf8,
+      1
+    );
+    this.dashLabelText.setText(
+      dashReadyRatio >= 1
+        ? 'DASH  [SHIFT]'
+        : `DASH  ${(this.player.dashCooldownRemaining / 1000).toFixed(1)}s`
+    );
+
+    // 5. Barra de Nível & XP
     const xpRatio =
       this.player.level >= MAX_PLAYER_LEVEL
         ? 1
@@ -1227,9 +1571,34 @@ export class GameScene extends Phaser.Scene {
             0,
             1
           );
-    this.xpBarFill.width = 456 * xpRatio;
+    this.xpBarFill.width = 272 * xpRatio;
+    this.xpLabelText.setText(
+      this.player.level >= MAX_PLAYER_LEVEL
+        ? `${pokeDef.name} Nv.${this.player.level} (MÁX — ARENA BOSS)`
+        : `${pokeDef.name} Nv.${this.player.level}  •  XP ${this.player.xp}/${this.player.xpToNextLevel}`
+    );
 
-    // Atualiza barra de vida do Boss Onix se estiver ativa
+    // 6. Relógio Central (00:03) + Substatus do Mapa/Ponte
+    this.centerTimerText.setText(RunHistory.formatTime(this.runTimeSeconds));
+
+    if (this.mapManager.isBossMapActive()) {
+      this.mapSubStatusText.setText('👑 Arena Final — Ginásio de Pedra');
+    } else if (this.mapManager.isNextMapGateOpen()) {
+      this.mapSubStatusText.setText(`🌉 Ponte aberta ao Norte!`);
+    } else {
+      const remaining = Math.max(
+        0,
+        Math.ceil(GAME_SETTINGS.MAP_DURATION_SECONDS - this.mapElapsedSeconds)
+      );
+      this.mapSubStatusText.setText(`${mapDef.name}  •  Ponte em ${remaining}s`);
+    }
+
+    // 7. Contador Superior Direito ("Derrotados: 1   Inimigos: 2")
+    this.rightStatsText.setText(
+      `Derrotados: ${this.defeatedCount}   Inimigos: ${this.enemies.length}`
+    );
+
+    // 8. Barra de Vida do Boss Onix
     if (this.bossEnemy && !this.bossEnemy.isDead) {
       this.bossHudContainer.setVisible(true);
       const bossRatio = Phaser.Math.Clamp(
@@ -1245,52 +1614,16 @@ export class GameScene extends Phaser.Scene {
       this.bossHudContainer.setVisible(false);
     }
 
-    // Atualiza barra de Esquiva (Dash - 2s)
-    const dashReadyRatio = Phaser.Math.Clamp(
-      1 - this.player.dashCooldownRemaining / DASH_COOLDOWN_MS,
-      0,
-      1
-    );
-    this.dashBarFill.width = 218 * dashReadyRatio;
-    this.dashBarFill.setFillStyle(
-      dashReadyRatio >= 1 ? 0x4ade80 : 0x38bdf8,
-      0.9
-    );
-    this.dashLabelText.setText(
-      dashReadyRatio >= 1
-        ? '💨 [SHIFT] DASH: PRONTO'
-        : `💨 [SHIFT] ${(this.player.dashCooldownRemaining / 1000).toFixed(1)}s`
-    );
-
-    // Atualiza barra de Especial [E / Q]
-    const specRatio = Phaser.Math.Clamp(
-      this.player.specialEnergy / SPECIAL_MAX_ENERGY,
-      0,
-      1
-    );
-    this.specialBarFill.width = 222 * specRatio;
-    this.specialBarFill.setFillStyle(
-      specRatio >= 1 ? 0xffcb05 : 0xf59e0b,
-      0.95
-    );
-    this.specialLabelText.setText(
-      specRatio >= 1
-        ? `${specDef.icon} [E/Q] ${specDef.name}: PRONTO!`
-        : `${specDef.icon} [E/Q] ${specDef.name}: ${Math.floor(specRatio * 100)}%`
-    );
-
-    // Exibe ícones das habilidades aprendidas
+    // 9. Habilidades aprendidas
     const learned: string[] = [];
     for (const [id, lvl] of this.player.getAbilityLevels().entries()) {
       if (lvl > 0) {
-        learned.push(`${ABILITIES[id].icon}${ABILITIES[id].name} Nv.${lvl}`);
+        learned.push(`${ABILITIES[id].icon}Nv.${lvl}`);
       }
     }
     this.abilitiesSummaryText.setVisible(learned.length > 0);
     if (learned.length > 0) {
-      this.abilitiesSummaryText.setText(
-        `Habilidades: ${learned.join('  •  ')}`
-      );
+      this.abilitiesSummaryText.setText(learned.join('  '));
     }
   }
 

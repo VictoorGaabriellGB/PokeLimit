@@ -59,7 +59,7 @@ interface ProjectileConfig {
   range: number;
   hitRadius: number;
   pierce: number;
-  draw: () => Phaser.GameObjects.Shape;
+  draw: () => Phaser.GameObjects.Shape | Phaser.GameObjects.Image;
   rotateSpeed?: number;
   trailColor?: number;
   onHit: (enemy: Enemy, px: number, py: number) => void;
@@ -89,6 +89,7 @@ export class Player {
   public isDead = false;
 
   private invulnerableMs = 0;
+  private painPortraitTimerMs = 0;
   private regenAccumMs = 0;
   private supportBuffTimerMs = 0;
   private lifestealAccum = 0;
@@ -188,6 +189,20 @@ export class Player {
     this.onKill = onKill;
   }
 
+  /**
+   * Teleporta o jogador com segurança para uma nova coordenada (troca de mapa / portal),
+   * resetando imediatamente o corpo físico do Arcade Physics para não voltar à posição antiga.
+   */
+  teleportTo(x: number, y: number): void {
+    this.dashTimeRemaining = 0;
+    this.sprite.setPosition(x, y);
+    this.sprite.body.reset(x, y);
+    this.sprite.setVelocity(0, 0);
+    this.sprite.setDepth(depthForY(y));
+    this.shadow.setPosition(x, y + 10);
+    this.updateHpBar();
+  }
+
   getPokemonDefinition(): PokemonDefinition {
     return this.pokemonDef;
   }
@@ -218,6 +233,13 @@ export class Player {
 
   isSpecialReady(): boolean {
     return this.specialEnergy >= SPECIAL_MAX_ENERGY;
+  }
+
+  /**
+   * Indica se o retrato do Pokémon na HUD deve exibir a expressão de dor (Pain.png).
+   */
+  isInPain(): boolean {
+    return this.painPortraitTimerMs > 0 || this.isDead;
   }
 
   private get profile(): PokemonAttackProfile {
@@ -348,6 +370,7 @@ export class Player {
     const finalDamage = Math.max(1, Math.round(rawAmount * (1 - this.classDef.stats.damageReduction)));
     this.hp = Math.max(0, this.hp - finalDamage);
     this.invulnerableMs = 650;
+    this.painPortraitTimerMs = 620;
 
     this.sprite.setTint(0xff5555);
     this.scene.time.delayedCall(150, () => {
@@ -457,6 +480,7 @@ export class Player {
 
   private tickTimers(delta: number): void {
     if (this.invulnerableMs > 0) this.invulnerableMs -= delta;
+    if (this.painPortraitTimerMs > 0) this.painPortraitTimerMs -= delta;
     if (this.supportBuffTimerMs > 0) this.supportBuffTimerMs -= delta;
     if (this.attackCooldownRemaining > 0) this.attackCooldownRemaining -= delta;
     if (this.dashCooldownRemaining > 0) this.dashCooldownRemaining -= delta;
@@ -727,9 +751,17 @@ export class Player {
     }
   }
 
-  /** Projétil genérico com perfuração e rastro */
+  /** Projétil genérico com perfuração, rastro e suporte a sprite estático de ataque */
   private spawnProjectile(cfg: ProjectileConfig): void {
-    const shape = cfg.draw();
+    const customTexKey = PokemonAnimationManager.getAttackSpriteKey(this.pokemonDef.id);
+    const hasCustomSprite =
+      Boolean(this.profile.spriteFile) && this.scene.textures.exists(customTexKey);
+
+    const shape = hasCustomSprite
+      ? this.scene.add
+          .image(cfg.x, cfg.y, customTexKey)
+          .setScale(this.profile.spriteScale ?? 1)
+      : cfg.draw();
     shape.setPosition(cfg.x, cfg.y).setDepth(DEPTH.EFFECTS);
     shape.rotation = cfg.angle;
 
@@ -816,19 +848,29 @@ export class Player {
     const ratio = this.hp / this.maxHp;
     const lowHp = ratio < 0.2 ? 1.3 : ratio < 0.3 ? 1.185 : ratio < 0.4 ? 1.1 : 1;
 
+    const customTexKey = PokemonAnimationManager.getAttackSpriteKey(this.pokemonDef.id);
+    const hasCustomSprite =
+      Boolean(this.profile.spriteFile) && this.scene.textures.exists(customTexKey);
+
     const flames = 3 + multi * 2;
     for (const a of this.spreadAngles(aim, flames, (halfArc * 2) / Math.max(1, flames - 1))) {
       const fx = this.sprite.x + Math.cos(a) * range * 0.4;
       const fy = this.sprite.y + Math.sin(a) * range * 0.4;
-      const flame = this.scene.add
-        .circle(fx, fy, 15, p.elementColor, 0.75)
-        .setStrokeStyle(3, p.secondaryColor, 1)
-        .setDepth(DEPTH.EFFECTS);
+      const flame = hasCustomSprite
+        ? this.scene.add
+            .image(fx, fy, customTexKey)
+            .setScale(this.profile.spriteScale ?? 1)
+            .setRotation(a)
+            .setDepth(DEPTH.EFFECTS)
+        : this.scene.add
+            .circle(fx, fy, 15, p.elementColor, 0.75)
+            .setStrokeStyle(3, p.secondaryColor, 1)
+            .setDepth(DEPTH.EFFECTS);
       this.scene.tweens.add({
         targets: flame,
         x: this.sprite.x + Math.cos(a) * range * 0.75,
         y: this.sprite.y + Math.sin(a) * range * 0.75,
-        scale: 1.6,
+        scale: hasCustomSprite ? (this.profile.spriteScale ?? 1) * 1.4 : 1.6,
         alpha: 0,
         duration: 240,
         onComplete: () => flame.destroy(),
@@ -890,24 +932,45 @@ export class Player {
     const waves = 1 + this.getAbilityLevel('multishot');
     const radius = 84 * this.rangeMult;
 
+    const customTexKey = PokemonAnimationManager.getAttackSpriteKey(this.pokemonDef.id);
+    const hasCustomSprite =
+      Boolean(this.profile.spriteFile) && this.scene.textures.exists(customTexKey);
+
     for (let i = 0; i < waves; i++) {
       const angle = aim + (i * Math.PI * 2) / waves;
       const ox = this.sprite.x + Math.cos(angle) * 30;
       const oy = this.sprite.y + Math.sin(angle) * 30;
 
-      const wave = this.scene.add
-        .circle(ox, oy, 18, p.elementColor, 0.5)
-        .setStrokeStyle(4, p.secondaryColor, 0.95)
-        .setDepth(DEPTH.EFFECTS);
-      this.scene.tweens.add({
-        targets: wave,
-        x: ox + Math.cos(angle) * 42,
-        y: oy + Math.sin(angle) * 42,
-        radius: radius * 0.85,
-        alpha: 0,
-        duration: 290,
-        onComplete: () => wave.destroy(),
-      });
+      if (hasCustomSprite) {
+        const waveImg = this.scene.add
+          .image(ox, oy, customTexKey)
+          .setScale(this.profile.spriteScale ?? 1)
+          .setRotation(angle)
+          .setDepth(DEPTH.EFFECTS);
+        this.scene.tweens.add({
+          targets: waveImg,
+          x: ox + Math.cos(angle) * 48,
+          y: oy + Math.sin(angle) * 48,
+          scale: (this.profile.spriteScale ?? 1) * 1.5,
+          alpha: 0,
+          duration: 290,
+          onComplete: () => waveImg.destroy(),
+        });
+      } else {
+        const wave = this.scene.add
+          .circle(ox, oy, 18, p.elementColor, 0.5)
+          .setStrokeStyle(4, p.secondaryColor, 0.95)
+          .setDepth(DEPTH.EFFECTS);
+        this.scene.tweens.add({
+          targets: wave,
+          x: ox + Math.cos(angle) * 42,
+          y: oy + Math.sin(angle) * 42,
+          radius: radius * 0.85,
+          alpha: 0,
+          duration: 290,
+          onComplete: () => wave.destroy(),
+        });
+      }
 
       const cx = ox + Math.cos(angle) * 26;
       const cy = oy + Math.sin(angle) * 26;

@@ -233,6 +233,10 @@ export interface PokemonAttackProfile {
   cooldownMs: number;
   range: number;
   description: string;
+  /** Caminho opcional de imagem estática para o ataque (ex: 'assets/attacks/raio.png') */
+  spriteFile?: string;
+  /** Escala opcional para o sprite do ataque (padrão: 1.0) */
+  spriteScale?: number;
 }
 
 export interface PokemonDefinition {
@@ -256,10 +260,11 @@ export interface MapDefinition {
   file: string;
   theme: 'forest' | 'cave' | 'boss';
   worldScale: number;
-  /** Coordenada normalizada (0 a 1) onde o portal de saída aparece quando o tempo acaba */
-  exitPortalNorm: { x: number; y: number };
-  /** Coordenada normalizada (0 a 1) onde o jogador nasce ao entrar neste mapa */
+  northExitNormX: number;
+  southEntranceNormX: number;
   initialSpawnNorm: { x: number; y: number };
+  /** Recorta a base da imagem (0..1) para conectar exatamente no ponto desejado do mapa */
+  southCropNormY?: number;
 }
 
 export const MAP_SEQUENCE: MapDefinition[] = [
@@ -269,8 +274,9 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     file: 'assets/maps/map1.jpeg',
     theme: 'forest',
     worldScale: 1.45,
-    exitPortalNorm: { x: 0.505, y: 0.055 }, // Estrada amarela no topo central
-    initialSpawnNorm: { x: 0.45, y: 0.56 }, // Praça central da vila
+    northExitNormX: 0.505,
+    southEntranceNormX: 0.475,
+    initialSpawnNorm: { x: 0.49, y: 0.535 },
   },
   {
     key: 'map2',
@@ -278,8 +284,9 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     file: 'assets/maps/map2.jpeg',
     theme: 'forest',
     worldScale: 1.45,
-    exitPortalNorm: { x: 0.575, y: 0.055 }, // Estrada amarela no topo
-    initialSpawnNorm: { x: 0.475, y: 0.88 }, // Estrada sul
+    northExitNormX: 0.575,
+    southEntranceNormX: 0.475,
+    initialSpawnNorm: { x: 0.475, y: 0.88 },
   },
   {
     key: 'map3',
@@ -287,9 +294,11 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     file: 'assets/maps/map3.jpeg',
     theme: 'forest',
     worldScale: 2.6,
-    exitPortalNorm: { x: 0.495, y: 0.07 }, // Clareira no topo
-    // Nasce DEPOIS (acima) da guarita e fileira de árvores da imagem anexada!
+    northExitNormX: 0.495,
+    southEntranceNormX: 0.45,
     initialSpawnNorm: { x: 0.50, y: 0.655 },
+    // Recorta a guarita e fileira de árvores inferior para o jogador entrar DEPOIS da área em anexo
+    southCropNormY: 0.685,
   },
   {
     key: 'map4',
@@ -297,9 +306,11 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     file: 'assets/maps/map4.jpeg',
     theme: 'forest',
     worldScale: 1.45,
-    exitPortalNorm: { x: 0.45, y: 0.16 }, // Em frente ao grande edifício no norte
-    // Nasce EXATAMENTE onde está o Raichu na foto em anexo (curva do caminho amarelo)!
+    northExitNormX: 0.45,
+    southEntranceNormX: 0.485,
     initialSpawnNorm: { x: 0.485, y: 0.715 },
+    // Recorta a guarita sul para o jogador entrar EXATAMENTE onde está o Raichu na foto em anexo
+    southCropNormY: 0.735,
   },
   {
     key: 'map6',
@@ -307,7 +318,8 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     file: 'assets/maps/map6.jpeg',
     theme: 'cave',
     worldScale: 1.25,
-    exitPortalNorm: { x: 0.5, y: 0.08 },
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.495,
     initialSpawnNorm: { x: 0.495, y: 0.88 },
   },
   {
@@ -316,7 +328,8 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     file: 'assets/maps/map7.jpeg',
     theme: 'cave',
     worldScale: 1.25,
-    exitPortalNorm: { x: 0.495, y: 0.12 },
+    northExitNormX: 0.495,
+    southEntranceNormX: 0.495,
     initialSpawnNorm: { x: 0.495, y: 0.88 },
   },
 ];
@@ -327,7 +340,8 @@ export const BOSS_MAP_DEFINITION: MapDefinition = {
   file: 'assets/maps/map5-BOSS.jpeg',
   theme: 'boss',
   worldScale: 1.35,
-  exitPortalNorm: { x: 0.5, y: 0.4 },
+  northExitNormX: 0.5,
+  southEntranceNormX: 0.5,
   initialSpawnNorm: { x: 0.5, y: 0.74 },
 };
 
