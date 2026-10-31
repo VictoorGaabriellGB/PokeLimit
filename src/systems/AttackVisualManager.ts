@@ -2,13 +2,6 @@ import Phaser from 'phaser';
 import { ABILITIES, AbilityId } from '../config/abilities';
 import { ElementType } from '../config/pokemonManifest';
 
-interface BoundingCluster {
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-}
-
 interface RawSheetPreload {
   key: string;
   file: string;
@@ -64,186 +57,6 @@ export class AttackVisualManager {
     return `icon-move-${slot}-${element}`;
   }
 
-  // ===================== UTILITÁRIOS DE EXTRAÇÃO & CHROMA-KEY =====================
-
-  private static loadChromaKeyedCanvas(
-    scene: Phaser.Scene,
-    rawKey: string,
-    bgDarkMax: number,
-    clearRects: Array<{ x: number; y: number; w: number; h: number }> = []
-  ): HTMLCanvasElement | null {
-    if (!scene.textures.exists(rawKey)) return null;
-    const img = scene.textures.get(rawKey).getSourceImage() as HTMLImageElement;
-    const w = img.width;
-    const h = img.height;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-    ctx.drawImage(img, 0, 0);
-
-    if (clearRects.length > 0) {
-      ctx.fillStyle = '#000000';
-      for (const r of clearRects) {
-        ctx.fillRect(r.x, r.y, r.w, r.h);
-      }
-    }
-
-    const imgData = ctx.getImageData(0, 0, w, h);
-    const d = imgData.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i];
-      const g = d[i + 1];
-      const b = d[i + 2];
-      const brightness = Math.max(r, g, b);
-      if (brightness <= bgDarkMax) {
-        d[i + 3] = 0;
-      } else if (brightness <= bgDarkMax + 28) {
-        const alpha = Math.pow((brightness - bgDarkMax) / 28, 1.4);
-        d[i + 3] = Math.round(d[i + 3] * alpha);
-      }
-    }
-    ctx.putImageData(imgData, 0, 0);
-    return canvas;
-  }
-
-  private static getBoundsInRegion(
-    canvas: HTMLCanvasElement,
-    x0: number,
-    x1: number
-  ): BoundingCluster {
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-    const startX = Math.max(0, Math.floor(x0));
-    const endX = Math.min(canvas.width - 1, Math.ceil(x1));
-    const w = Math.max(1, endX - startX + 1);
-    const h = canvas.height;
-    const data = ctx.getImageData(startX, 0, w, h).data;
-
-    let minX = w;
-    let maxX = 0;
-    let minY = h;
-    let maxY = 0;
-    let found = false;
-
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const a = data[(y * w + x) * 4 + 3];
-        if (a > 30) {
-          found = true;
-          if (x < minX) minX = x;
-          if (x > maxX) maxX = x;
-          if (y < minY) minY = y;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-
-    if (!found) {
-      return { minX: startX, maxX: endX, minY: 0, maxY: h - 1 };
-    }
-
-    return {
-      minX: startX + minX,
-      maxX: startX + maxX,
-      minY,
-      maxY,
-    };
-  }
-
-  /**
-   * Detecta automaticamente os grupos horizontais de pixels visíveis (ideal para
-   * spritesheets onde os quadros crescem de largura da esquerda para a direita).
-   */
-  private static extractSpriteClusters(
-    canvas: HTMLCanvasElement,
-    expectedCount: number
-  ): BoundingCluster[] {
-    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
-    const w = canvas.width;
-    const h = canvas.height;
-    const data = ctx.getImageData(0, 0, w, h).data;
-
-    const colOccupied = new Uint16Array(w);
-    for (let x = 0; x < w; x++) {
-      let count = 0;
-      for (let y = 0; y < h; y++) {
-        if (data[(y * w + x) * 4 + 3] > 28) count++;
-      }
-      colOccupied[x] = count;
-    }
-
-    const segments: Array<{ start: number; end: number }> = [];
-    let inSeg = false;
-    let segStart = 0;
-    for (let x = 0; x < w; x++) {
-      if (colOccupied[x] >= 2) {
-        if (!inSeg) {
-          inSeg = true;
-          segStart = x;
-        }
-      } else if (inSeg) {
-        inSeg = false;
-        if (x - 1 - segStart >= 4) {
-          segments.push({ start: segStart, end: x - 1 });
-        }
-      }
-    }
-    if (inSeg && w - 1 - segStart >= 4) {
-      segments.push({ start: segStart, end: w - 1 });
-    }
-
-    // Se houver faíscas soltas que criaram segmentos extras, funde os mais próximos
-    while (segments.length > expectedCount) {
-      let bestIdx = 0;
-      let smallestGap = Infinity;
-      for (let i = 0; i < segments.length - 1; i++) {
-        const gap = segments[i + 1].start - segments[i].end;
-        if (gap < smallestGap) {
-          smallestGap = gap;
-          bestIdx = i;
-        }
-      }
-      segments.splice(bestIdx, 2, {
-        start: segments[bestIdx].start,
-        end: segments[bestIdx + 1].end,
-      });
-    }
-
-    // Fallback seguro caso dois quadros tenham encostado
-    while (segments.length > 0 && segments.length < expectedCount) {
-      let widestIdx = 0;
-      let maxWidth = 0;
-      for (let i = 0; i < segments.length; i++) {
-        const sw = segments[i].end - segments[i].start;
-        if (sw > maxWidth) {
-          maxWidth = sw;
-          widestIdx = i;
-        }
-      }
-      const seg = segments[widestIdx];
-      const mid = Math.floor((seg.start + seg.end) / 2);
-      segments.splice(
-        widestIdx,
-        1,
-        { start: seg.start, end: mid },
-        { start: mid + 1, end: seg.end }
-      );
-    }
-
-    if (segments.length === 0) {
-      const out: BoundingCluster[] = [];
-      for (let i = 0; i < expectedCount; i++) {
-        const x0 = Math.round((i * w) / expectedCount);
-        const x1 = Math.round(((i + 1) * w) / expectedCount) - 1;
-        out.push(this.getBoundsInRegion(canvas, x0, x1));
-      }
-      return out;
-    }
-
-    return segments.map((s) => this.getBoundsInRegion(canvas, s.start, s.end));
-  }
-
   private static registerCanvasSheet(
     scene: Phaser.Scene,
     sheetKey: string,
@@ -265,78 +78,153 @@ export class AttackVisualManager {
 
   // ===================== 1. ELÉTRICO BÁSICO (ORIENTADO PARA +X) =====================
 
-  /**
-   * attack-eletric.jpeg possui 6 raios verticais (topo -> base brilhante).
-   * Rotacionamos -90° para que a ponta branca/dourada do raio aponte EXATAMENTE para +X (0 rad)!
-   */
   private static registerElectricBasic(scene: Phaser.Scene): void {
-    const src = this.loadChromaKeyedCanvas(scene, 'raw-attack-eletric', 56);
-    if (!src) return;
-
+    const fW = 38;
+    const fH = 20;
     const frameCount = 6;
-    const fW = 132;
-    const fH = 124;
-    const out = document.createElement('canvas');
-    out.width = fW * frameCount;
-    out.height = fH;
-    const ctx = out.getContext('2d')!;
+    const canvas = document.createElement('canvas');
+    canvas.width = fW * frameCount;
+    canvas.height = fH;
+    const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
 
     for (let f = 0; f < frameCount; f++) {
-      const cellX0 = (f * src.width) / frameCount;
-      const cellX1 = ((f + 1) * src.width) / frameCount - 1;
-      const b = this.getBoundsInRegion(src, cellX0, cellX1);
-      const bw = Math.max(1, b.maxX - b.minX + 1);
-      const bh = Math.max(1, b.maxY - b.minY + 1);
-
-      const cx = f * fW + fW / 2;
+      const ox = f * fW;
       const cy = fH / 2;
 
       ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(-Math.PI / 2);
-      // Contorno elétrico luminoso & corona voltaica
-      ctx.shadowColor = 'rgba(254, 240, 138, 0.9)';
-      ctx.shadowBlur = 8;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, -bw / 2, -bh / 2, bw, bh);
-      ctx.shadowBlur = 0;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, -bw / 2, -bh / 2, bw, bh);
-      ctx.restore();
+      ctx.translate(ox, 0);
 
-      // Ponta de lança elétrica sutil em +X para reforçar leitura direcional em voo
-      if (f >= 1 && f <= 4) {
-        const tipX = cx + bh / 2 - 2;
-        const grad = ctx.createRadialGradient(tipX, cy, 1, tipX, cy, 15);
-        grad.addColorStop(0, 'rgba(255,255,255,0.92)');
-        grad.addColorStop(0.5, 'rgba(254,240,138,0.55)');
-        grad.addColorStop(1, 'rgba(247,208,44,0)');
-        ctx.fillStyle = grad;
+      if (f < 4) {
+        // Projétil direcional em voo apontando para +X (ponta na direita)
+        // Aura externa luminosa
+        ctx.shadowColor = 'rgba(250, 204, 21, 0.85)';
+        ctx.shadowBlur = 6;
+
+        // Raio ziguezagueante externo (amarelo dourado vibrante)
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 3.2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'miter';
         ctx.beginPath();
-        ctx.arc(tipX, cy, 15, 0, Math.PI * 2);
+        const yOff = f % 2 === 0 ? 1 : -1;
+        ctx.moveTo(4, cy);
+        ctx.lineTo(12, cy - 4 * yOff);
+        ctx.lineTo(20, cy + 4 * yOff);
+        ctx.lineTo(28, cy - 3 * yOff);
+        ctx.lineTo(35, cy);
+        ctx.stroke();
+
+        // Núcleo branco incandescente de alta voltagem
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(6, cy);
+        ctx.lineTo(13, cy - 2.5 * yOff);
+        ctx.lineTo(21, cy + 2.5 * yOff);
+        ctx.lineTo(29, cy - 2 * yOff);
+        ctx.lineTo(36, cy);
+        ctx.stroke();
+
+        // Ponta de lança elétrica diamante em +X
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.moveTo(37, cy);
+        ctx.lineTo(30, cy - 3.5);
+        ctx.lineTo(32, cy);
+        ctx.lineTo(30, cy + 3.5);
+        ctx.closePath();
+        ctx.fill();
+
+        // Faíscas secundárias e corona ciano
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#67e8f9';
+        ctx.fillRect(10, cy + 5 * yOff, 1.8, 1.8);
+        ctx.fillRect(24, cy - 6 * yOff, 1.8, 1.8);
+        ctx.fillStyle = '#fef08a';
+        ctx.fillRect(4, cy + 3, 2, 2);
+      } else {
+        // Quadros 4 e 5: Impacto elétrico para compatibilidade de hit
+        const hitStep = f - 4;
+        const r = 5 + hitStep * 4.5;
+        ctx.strokeStyle = '#facc15';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        for (let i = 0; i < 8; i++) {
+          const ang = (i * Math.PI) / 4;
+          const sx = fW / 2 + Math.cos(ang) * (r * 0.4);
+          const sy = cy + Math.sin(ang) * (r * 0.4);
+          const ex = fW / 2 + Math.cos(ang) * r;
+          const ey = cy + Math.sin(ang) * r;
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(ex, ey);
+        }
+        ctx.stroke();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(fW / 2, cy, 3 - hitStep, 0, Math.PI * 2);
         ctx.fill();
       }
+
+      ctx.restore();
     }
 
     const sheetKey = 'sheet-attack-eletric';
-    this.registerCanvasSheet(scene, sheetKey, out, fW, fH, frameCount);
+    this.registerCanvasSheet(scene, sheetKey, canvas, fW, fH, frameCount);
 
     if (!scene.anims.exists('anim-attack-eletric')) {
       scene.anims.create({
         key: 'anim-attack-eletric',
-        frames: scene.anims.generateFrameNumbers(sheetKey, {
-          frames: [1, 2, 3, 4],
-        }),
+        frames: scene.anims.generateFrameNumbers(sheetKey, { frames: [0, 1, 2, 3] }),
         frameRate: 16,
         repeat: -1,
       });
     }
 
+    // Folha dedicada de impacto elétrico 32x32 para máxima nitidez
+    const hitW = 32;
+    const hitH = 32;
+    const hitCount = 4;
+    const hitCanvas = document.createElement('canvas');
+    hitCanvas.width = hitW * hitCount;
+    hitCanvas.height = hitH;
+    const hitCtx = hitCanvas.getContext('2d')!;
+    hitCtx.imageSmoothingEnabled = false;
+
+    for (let f = 0; f < hitCount; f++) {
+      const hx = f * hitW + hitW / 2;
+      const hy = hitH / 2;
+      const progress = f / (hitCount - 1);
+      const rad = 4 + progress * 11;
+      const alpha = Math.max(0.1, 1 - progress * 0.85);
+
+      hitCtx.save();
+      hitCtx.shadowColor = 'rgba(250, 204, 21, 0.9)';
+      hitCtx.shadowBlur = 8;
+      hitCtx.strokeStyle = `rgba(250, 204, 21, ${alpha})`;
+      hitCtx.lineWidth = 2.2;
+      hitCtx.beginPath();
+      for (let i = 0; i < 8; i++) {
+        const a = (i * Math.PI) / 4 + progress * 0.3;
+        hitCtx.moveTo(hx + Math.cos(a) * (rad * 0.3), hy + Math.sin(a) * (rad * 0.3));
+        hitCtx.lineTo(hx + Math.cos(a) * rad, hy + Math.sin(a) * rad);
+      }
+      hitCtx.stroke();
+
+      hitCtx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+      hitCtx.beginPath();
+      hitCtx.arc(hx, hy, Math.max(1, 4.5 * (1 - progress)), 0, Math.PI * 2);
+      hitCtx.fill();
+      hitCtx.restore();
+    }
+
+    const hitSheetKey = 'sheet-attack-eletric-hit';
+    this.registerCanvasSheet(scene, hitSheetKey, hitCanvas, hitW, hitH, hitCount);
+
     if (!scene.anims.exists('anim-attack-eletric-hit')) {
       scene.anims.create({
         key: 'anim-attack-eletric-hit',
-        frames: scene.anims.generateFrameNumbers(sheetKey, {
-          frames: [0, 2, 3, 5],
-        }),
+        frames: scene.anims.generateFrameNumbers(hitSheetKey, { start: 0, end: hitCount - 1 }),
         frameRate: 20,
         repeat: 0,
       });
@@ -345,52 +233,106 @@ export class AttackVisualManager {
 
   // ===================== 2. FOGO BÁSICO (ORIENTADO PARA +X) =====================
 
-  /**
-   * attack-fire.jpeg possui 6 chamas apontando para CIMA (-Y).
-   * Rotacionamos +90° sentido horário para que a língua de fogo aponte para a DIREITA (+X)!
-   */
   private static registerFireBasic(scene: Phaser.Scene): void {
-    const src = this.loadChromaKeyedCanvas(scene, 'raw-attack-fire', 56);
-    if (!src) return;
-
+    const fW = 38;
+    const fH = 22;
     const frameCount = 6;
-    const fW = 126;
-    const fH = 124;
-    const out = document.createElement('canvas');
-    out.width = fW * frameCount;
-    out.height = fH;
-    const ctx = out.getContext('2d')!;
+    const canvas = document.createElement('canvas');
+    canvas.width = fW * frameCount;
+    canvas.height = fH;
+    const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
 
     for (let f = 0; f < frameCount; f++) {
-      const cellX0 = Math.round((f * src.width) / frameCount);
-      const cellW = Math.round(src.width / frameCount);
-      const cellH = src.height;
-
-      const cx = f * fW + fW / 2;
+      const ox = f * fW;
       const cy = fH / 2;
 
       ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(Math.PI / 2);
-      // Contorno ardente de fogo vivo e núcleo brilhante
-      ctx.shadowColor = 'rgba(255, 107, 0, 0.9)';
-      ctx.shadowBlur = 8;
-      ctx.drawImage(src, cellX0, 0, cellW, cellH, -cellW / 2, -cellH / 2, cellW, cellH);
-      ctx.shadowBlur = 0;
-      ctx.drawImage(src, cellX0, 0, cellW, cellH, -cellW / 2, -cellH / 2, cellW, cellH);
+      ctx.translate(ox, 0);
+
+      if (f < 4) {
+        // Cometa ígneo aerodinâmico apontando diretamente para +X
+        const flicker = (f % 2 === 0 ? 1 : -1) * 1.5;
+
+        // Brilho térmico ao redor
+        ctx.shadowColor = 'rgba(239, 68, 68, 0.85)';
+        ctx.shadowBlur = 6;
+
+        // Camada externa: língua de fogo rubro/carmesim
+        ctx.fillStyle = '#dc2626';
+        ctx.beginPath();
+        ctx.moveTo(35, cy);
+        ctx.quadraticCurveTo(22, cy - 8 + flicker, 6, cy - 4);
+        ctx.lineTo(2, cy);
+        ctx.lineTo(6, cy + 4);
+        ctx.quadraticCurveTo(22, cy + 8 - flicker, 35, cy);
+        ctx.closePath();
+        ctx.fill();
+
+        // Camada média: chama laranja vibrante
+        ctx.fillStyle = '#f97316';
+        ctx.beginPath();
+        ctx.moveTo(34, cy);
+        ctx.quadraticCurveTo(22, cy - 5 + flicker * 0.6, 10, cy - 2);
+        ctx.lineTo(6, cy);
+        ctx.lineTo(10, cy + 2);
+        ctx.quadraticCurveTo(22, cy + 5 - flicker * 0.6, 34, cy);
+        ctx.closePath();
+        ctx.fill();
+
+        // Núcleo interno: âmbar dourado e ponta incandescente branca
+        ctx.fillStyle = '#fbbf24';
+        ctx.beginPath();
+        ctx.moveTo(33, cy);
+        ctx.quadraticCurveTo(24, cy - 3, 16, cy);
+        ctx.quadraticCurveTo(24, cy + 3, 33, cy);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.ellipse(31, cy, 4, 1.8, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Faíscas e brasas voando para trás (-X)
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = '#fef08a';
+        ctx.fillRect(4, cy - 3 * flicker, 1.8, 1.8);
+        ctx.fillRect(8, cy + 4 * flicker, 1.6, 1.6);
+      } else {
+        // Quadros 4 e 5: Golpe de Garra Ígnea em arco (anim-attack-fire-slash)
+        const slashStep = f - 4;
+        ctx.shadowColor = 'rgba(249, 115, 22, 0.9)';
+        ctx.shadowBlur = 8;
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(14, cy, 14 + slashStep * 2, -0.9, 0.9, false);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        ctx.arc(15, cy, 14 + slashStep * 2, -0.75, 0.75, false);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(16, cy, 14 + slashStep * 2, -0.5, 0.5, false);
+        ctx.stroke();
+      }
+
       ctx.restore();
     }
 
     const sheetKey = 'sheet-attack-fire';
-    this.registerCanvasSheet(scene, sheetKey, out, fW, fH, frameCount);
+    this.registerCanvasSheet(scene, sheetKey, canvas, fW, fH, frameCount);
 
     if (!scene.anims.exists('anim-attack-fire')) {
       scene.anims.create({
         key: 'anim-attack-fire',
-        frames: scene.anims.generateFrameNumbers(sheetKey, {
-          frames: [1, 2, 3, 4],
-        }),
+        frames: scene.anims.generateFrameNumbers(sheetKey, { frames: [0, 1, 2, 3] }),
         frameRate: 16,
         repeat: -1,
       });
@@ -399,435 +341,579 @@ export class AttackVisualManager {
     if (!scene.anims.exists('anim-attack-fire-slash')) {
       scene.anims.create({
         key: 'anim-attack-fire-slash',
-        frames: scene.anims.generateFrameNumbers(sheetKey, {
-          start: 0,
-          end: 5,
-        }),
+        frames: scene.anims.generateFrameNumbers(sheetKey, { frames: [0, 1, 4, 5] }),
         frameRate: 18,
         repeat: 0,
       });
     }
   }
 
-  // ===================== 3. PLANTA BÁSICO (ALINHADO PARA +X SEM GIRO CAÓTICO) =====================
+  // ===================== 3. PLANTA BÁSICO (ORIENTADO PARA +X) =====================
 
-  /**
-   * attack-grass.jpeg possui 6 folhas com inclinações diferentes em cada quadro.
-   * Alinhamos cada folha para que sua ponta cortante aponte para a DIREITA (+X)
-   * com rastro de vento esmeralda atrás (-X).
-   */
   private static registerGrassBasic(scene: Phaser.Scene): void {
-    const src = this.loadChromaKeyedCanvas(scene, 'raw-attack-grass', 56);
-    if (!src) return;
-
-    const frameCount = 6;
-    const fW = 128;
-    const fH = 120;
-    const out = document.createElement('canvas');
-    out.width = fW * frameCount;
-    out.height = fH;
-    const ctx = out.getContext('2d')!;
+    const fW = 36;
+    const fH = 18;
+    const frameCount = 4;
+    const canvas = document.createElement('canvas');
+    canvas.width = fW * frameCount;
+    canvas.height = fH;
+    const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
 
-    // Ângulos de correção para alinhar a ponta de cada folha ao eixo +X
-    const alignDeg = [-22, -52, -85, 68, 32, -4];
-
     for (let f = 0; f < frameCount; f++) {
-      const cellX0 = (f * src.width) / frameCount;
-      const cellX1 = ((f + 1) * src.width) / frameCount - 1;
-      const b = this.getBoundsInRegion(src, cellX0, cellX1);
-      const bw = Math.max(1, b.maxX - b.minX + 1);
-      const bh = Math.max(1, b.maxY - b.minY + 1);
-
-      const cx = f * fW + fW / 2 + 4;
+      const ox = f * fW;
       const cy = fH / 2;
 
-      // Rastro cortante de vento na traseira (-X)
-      const wakeGrad = ctx.createLinearGradient(cx - 52, cy, cx + 14, cy);
-      wakeGrad.addColorStop(0, 'rgba(74, 222, 128, 0)');
-      wakeGrad.addColorStop(0.7, 'rgba(134, 239, 172, 0.36)');
-      wakeGrad.addColorStop(1, 'rgba(220, 252, 231, 0.72)');
-      ctx.fillStyle = wakeGrad;
+      ctx.save();
+      ctx.translate(ox, 0);
+
+      // Leve ondulação aerodinâmica da lâmina
+      const wobble = Math.sin((f / frameCount) * Math.PI * 2) * 1.2;
+
+      // Aura esmeralda
+      ctx.shadowColor = 'rgba(74, 222, 128, 0.8)';
+      ctx.shadowBlur = 5;
+
+      // Contorno exterior verde floresta escuro
+      ctx.fillStyle = '#15803d';
       ctx.beginPath();
-      ctx.moveTo(cx - 50, cy);
-      ctx.quadraticCurveTo(cx - 14, cy - 12, cx + 18, cy);
-      ctx.quadraticCurveTo(cx - 14, cy + 12, cx - 50, cy);
+      ctx.moveTo(33, cy);
+      ctx.quadraticCurveTo(18, cy - 7 + wobble, 4, cy);
+      ctx.quadraticCurveTo(18, cy + 7 + wobble, 33, cy);
+      ctx.closePath();
       ctx.fill();
 
-      ctx.save();
-      ctx.translate(cx, cy);
-      ctx.rotate(Phaser.Math.DegToRad(alignDeg[f]));
-      // Contorno de corte esmeralda afiado
-      ctx.shadowColor = 'rgba(74, 222, 128, 0.85)';
-      ctx.shadowBlur = 7;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, -bw / 2, -bh / 2, bw, bh);
+      // Corpo da Folha Navalha em verde esmeralda / lima vibrante
+      ctx.fillStyle = '#4ade80';
+      ctx.beginPath();
+      ctx.moveTo(32, cy);
+      ctx.quadraticCurveTo(18, cy - 5 + wobble, 6, cy);
+      ctx.quadraticCurveTo(18, cy + 5 + wobble, 32, cy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Espinha central de corte afiada (marfim/lima brilhante)
+      ctx.strokeStyle = '#f7fee7';
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      ctx.moveTo(6, cy);
+      ctx.lineTo(33, cy);
+      ctx.stroke();
+
+      // Nervuras aerodinâmicas inclinadas
+      ctx.strokeStyle = '#16a34a';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(14, cy);
+      ctx.lineTo(19, cy - 3.5);
+      ctx.moveTo(22, cy);
+      ctx.lineTo(27, cy - 3.5);
+      ctx.moveTo(14, cy);
+      ctx.lineTo(19, cy + 3.5);
+      ctx.moveTo(22, cy);
+      ctx.lineTo(27, cy + 3.5);
+      ctx.stroke();
+
+      // Arco de corte de ar translúcido na frente
       ctx.shadowBlur = 0;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, -bw / 2, -bh / 2, bw, bh);
+      ctx.strokeStyle = 'rgba(247, 254, 231, 0.85)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(28, cy, 7, -0.6, 0.6);
+      ctx.stroke();
+
       ctx.restore();
     }
 
     const sheetKey = 'sheet-attack-grass';
-    this.registerCanvasSheet(scene, sheetKey, out, fW, fH, frameCount);
+    this.registerCanvasSheet(scene, sheetKey, canvas, fW, fH, frameCount);
 
     if (!scene.anims.exists('anim-attack-grass')) {
       scene.anims.create({
         key: 'anim-attack-grass',
-        frames: scene.anims.generateFrameNumbers(sheetKey, {
-          start: 0,
-          end: 5,
-        }),
+        frames: scene.anims.generateFrameNumbers(sheetKey, { start: 0, end: frameCount - 1 }),
+        frameRate: 15,
+        repeat: -1,
+      });
+    }
+  }
+
+  // ===================== 4. ÁGUA BÁSICO (ORIENTADO PARA +X) =====================
+
+  private static registerWaterBasic(scene: Phaser.Scene): void {
+    const fW = 36;
+    const fH = 20;
+    const frameCount = 4;
+    const canvas = document.createElement('canvas');
+    canvas.width = fW * frameCount;
+    canvas.height = fH;
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingEnabled = false;
+
+    for (let f = 0; f < frameCount; f++) {
+      const ox = f * fW;
+      const cy = fH / 2;
+      const ripple = (f % 2 === 0 ? 1 : -1) * 1.2;
+
+      ctx.save();
+      ctx.translate(ox, 0);
+
+      // Brilho azul aquático
+      ctx.shadowColor = 'rgba(56, 189, 248, 0.85)';
+      ctx.shadowBlur = 6;
+
+      // Contorno oceânico profundo
+      ctx.fillStyle = '#0369a1';
+      ctx.beginPath();
+      ctx.moveTo(33, cy);
+      ctx.quadraticCurveTo(20, cy - 8 + ripple, 5, cy);
+      ctx.quadraticCurveTo(20, cy + 8 - ripple, 33, cy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Corpo da cápsula hidráulica azul celeste / ciano
+      ctx.fillStyle = '#38bdf8';
+      ctx.beginPath();
+      ctx.moveTo(32, cy);
+      ctx.quadraticCurveTo(20, cy - 5.5 + ripple, 8, cy);
+      ctx.quadraticCurveTo(20, cy + 5.5 - ripple, 32, cy);
+      ctx.closePath();
+      ctx.fill();
+
+      // Crista superior de espuma branca / gota cristalina
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 2.0;
+      ctx.beginPath();
+      ctx.moveTo(14, cy - 3.5 + ripple);
+      ctx.quadraticCurveTo(24, cy - 4.5, 31, cy);
+      ctx.stroke();
+
+      // Gotas de spray trailing em -X
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#e0f2fe';
+      ctx.beginPath();
+      ctx.arc(4, cy - 2 * ripple, 1.8, 0, Math.PI * 2);
+      ctx.arc(7, cy + 3 * ripple, 1.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    const sheetKey = 'sheet-attack-water';
+    this.registerCanvasSheet(scene, sheetKey, canvas, fW, fH, frameCount);
+
+    if (!scene.anims.exists('anim-attack-water')) {
+      scene.anims.create({
+        key: 'anim-attack-water',
+        frames: scene.anims.generateFrameNumbers(sheetKey, { start: 0, end: frameCount - 1 }),
+        frameRate: 16,
+        repeat: -1,
+      });
+    }
+
+    // Splash de impacto d'água nítido 34x34
+    const hitW = 34;
+    const hitH = 34;
+    const hitCount = 4;
+    const hitCanvas = document.createElement('canvas');
+    hitCanvas.width = hitW * hitCount;
+    hitCanvas.height = hitH;
+    const hitCtx = hitCanvas.getContext('2d')!;
+    hitCtx.imageSmoothingEnabled = false;
+
+    for (let f = 0; f < hitCount; f++) {
+      const hx = f * hitW + hitW / 2;
+      const hy = hitH / 2;
+      const progress = f / (hitCount - 1);
+      const rad = 4 + progress * 11;
+      const alpha = Math.max(0.1, 1 - progress * 0.85);
+
+      hitCtx.save();
+      hitCtx.shadowColor = 'rgba(56, 189, 248, 0.9)';
+      hitCtx.shadowBlur = 7;
+
+      // Anel de ondulação expansiva
+      hitCtx.strokeStyle = `rgba(56, 189, 248, ${alpha})`;
+      hitCtx.lineWidth = 2.4;
+      hitCtx.beginPath();
+      hitCtx.arc(hx, hy, rad, 0, Math.PI * 2);
+      hitCtx.stroke();
+
+      // Gotículas de splash radiais
+      hitCtx.fillStyle = `rgba(224, 242, 254, ${alpha})`;
+      for (let i = 0; i < 6; i++) {
+        const a = (i * Math.PI) / 3 + progress * 0.4;
+        const dist = rad * 1.15;
+        hitCtx.beginPath();
+        hitCtx.arc(hx + Math.cos(a) * dist, hy + Math.sin(a) * dist, 1.8 * (1 - progress * 0.5), 0, Math.PI * 2);
+        hitCtx.fill();
+      }
+
+      hitCtx.restore();
+    }
+
+    const hitSheetKey = 'sheet-attack-water-hit';
+    this.registerCanvasSheet(scene, hitSheetKey, hitCanvas, hitW, hitH, hitCount);
+
+    if (!scene.anims.exists('anim-attack-water-hit')) {
+      scene.anims.create({
+        key: 'anim-attack-water-hit',
+        frames: scene.anims.generateFrameNumbers(hitSheetKey, { start: 0, end: hitCount - 1 }),
+        frameRate: 20,
+        repeat: 0,
+      });
+    }
+  }
+
+  // ===================== 5. ESPECIAIS (ULTIMATES VISUALMENTE ESPETACULARES) =====================
+
+  /**
+   * ULT Elétrica (Pikachu): Escudo Voltaico Esférico Proporcional (64x64)
+   * 8 quadros com esferas de plasma, anel eletrostático e 4 arcos de raio em rotação 360°.
+   */
+  private static registerElectricSpecial(scene: Phaser.Scene): void {
+    const fW = 64;
+    const fH = 64;
+    const frameCount = 8;
+    const canvas = document.createElement('canvas');
+    canvas.width = fW * frameCount;
+    canvas.height = fH;
+    const ctx = canvas.getContext('2d')!;
+    ctx.imageSmoothingEnabled = false;
+
+    for (let f = 0; f < frameCount; f++) {
+      const cx = f * fW + fW / 2;
+      const cy = fH / 2;
+      const rot = (f * Math.PI) / 4;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      // Brilho intenso elétrico
+      ctx.shadowColor = 'rgba(250, 204, 21, 0.95)';
+      ctx.shadowBlur = 10;
+
+      // Bolha de plasma interna translúcida
+      const grad = ctx.createRadialGradient(0, 0, 4, 0, 0, 24);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 0.45)');
+      grad.addColorStop(0.5, 'rgba(254, 240, 138, 0.35)');
+      grad.addColorStop(1, 'rgba(250, 204, 21, 0.15)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, 24, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Anel eletrostático externo
+      ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 24, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // 4 Arcos de raio ziguezagueantes girando ao redor da esfera
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1.8;
+      for (let i = 0; i < 4; i++) {
+        const a = rot + (i * Math.PI) / 2;
+        const p1x = Math.cos(a) * 23;
+        const p1y = Math.sin(a) * 23;
+        const midA = a + 0.38;
+        const pMidX = Math.cos(midA) * 27;
+        const pMidY = Math.sin(midA) * 27;
+        const p2x = Math.cos(a + 0.75) * 23;
+        const p2y = Math.sin(a + 0.75) * 23;
+
+        ctx.beginPath();
+        ctx.moveTo(p1x, p1y);
+        ctx.lineTo(pMidX, pMidY);
+        ctx.lineTo(p2x, p2y);
+        ctx.stroke();
+      }
+
+      // Nódulos de energia brilhantes nos 4 polos
+      ctx.fillStyle = '#67e8f9';
+      for (let i = 0; i < 4; i++) {
+        const a = rot + (i * Math.PI) / 2 + Math.PI / 4;
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * 24, Math.sin(a) * 24, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+
+    const sheetKey = 'sheet-especial-eletrico';
+    this.registerCanvasSheet(scene, sheetKey, canvas, fW, fH, frameCount);
+
+    if (!scene.anims.exists('anim-especial-eletrico')) {
+      scene.anims.create({
+        key: 'anim-especial-eletrico',
+        frames: scene.anims.generateFrameNumbers(sheetKey, { start: 0, end: frameCount - 1 }),
         frameRate: 16,
         repeat: -1,
       });
     }
   }
 
-  // ===================== 4. ÁGUA BÁSICO (VOO DIRECIONAL +X & SPLASH NO IMPACTO) =====================
-
   /**
-   * attack-water.jpeg tem esferas nos quadros 0..3 e anéis de splash estourando nos quadros 4..5.
-   * Separamos o projétil pressurizado direcional (+X) do splash de impacto!
-   */
-  private static registerWaterBasic(scene: Phaser.Scene): void {
-    const src = this.loadChromaKeyedCanvas(scene, 'raw-attack-water', 56);
-    if (!src) return;
-
-    const rawCells = 6;
-    const fW = 132;
-    const fH = 116;
-
-    // 4a. Projétil pressurizado em voo (4 quadros usando as esferas cheias 2 e 3 + cauda hidráulica em -X)
-    const flightFrames = 4;
-    const flightCanvas = document.createElement('canvas');
-    flightCanvas.width = fW * flightFrames;
-    flightCanvas.height = fH;
-    const fCtx = flightCanvas.getContext('2d')!;
-    fCtx.imageSmoothingEnabled = false;
-
-    const orbIndices = [2, 3, 2, 3];
-    for (let i = 0; i < flightFrames; i++) {
-      const rawIdx = orbIndices[i];
-      const cellX0 = (rawIdx * src.width) / rawCells;
-      const cellX1 = ((rawIdx + 1) * src.width) / rawCells - 1;
-      const b = this.getBoundsInRegion(src, cellX0, cellX1);
-      const bw = Math.max(1, b.maxX - b.minX + 1);
-      const bh = Math.max(1, b.maxY - b.minY + 1);
-
-      const cx = i * fW + fW / 2 + 12;
-      const cy = fH / 2;
-
-      // Cauda de jato pressurizado apontando de -X para +X
-      const jetGrad = fCtx.createLinearGradient(cx - 64, cy, cx + 10, cy);
-      jetGrad.addColorStop(0, 'rgba(0, 180, 216, 0)');
-      jetGrad.addColorStop(0.55, 'rgba(56, 189, 248, 0.48)');
-      jetGrad.addColorStop(1, 'rgba(224, 242, 254, 0.88)');
-      fCtx.fillStyle = jetGrad;
-      const waveOffset = i % 2 === 0 ? 3 : -3;
-      fCtx.beginPath();
-      fCtx.moveTo(cx - 62, cy + waveOffset);
-      fCtx.quadraticCurveTo(cx - 22, cy - 20, cx + 6, cy - 16);
-      fCtx.lineTo(cx + 6, cy + 16);
-      fCtx.quadraticCurveTo(cx - 22, cy + 20, cx - 62, cy + waveOffset);
-      fCtx.fill();
-
-      // Desenha a esfera com contorno hidro-cristalino
-      fCtx.save();
-      fCtx.shadowColor = 'rgba(56, 189, 248, 0.88)';
-      fCtx.shadowBlur = 7;
-      fCtx.drawImage(src, b.minX, b.minY, bw, bh, cx - bw / 2, cy - bh / 2, bw, bh);
-      fCtx.shadowBlur = 0;
-      fCtx.drawImage(src, b.minX, b.minY, bw, bh, cx - bw / 2, cy - bh / 2, bw, bh);
-      fCtx.restore();
-
-      // Crista frontal de espuma em +X
-      fCtx.strokeStyle = 'rgba(255, 255, 255, 0.88)';
-      fCtx.lineWidth = 3;
-      fCtx.beginPath();
-      fCtx.arc(cx + 4, cy, bh * 0.46, -0.85, 0.85);
-      fCtx.stroke();
-    }
-
-    const flightSheetKey = 'sheet-attack-water';
-    this.registerCanvasSheet(
-      scene,
-      flightSheetKey,
-      flightCanvas,
-      fW,
-      fH,
-      flightFrames
-    );
-
-    if (!scene.anims.exists('anim-attack-water')) {
-      scene.anims.create({
-        key: 'anim-attack-water',
-        frames: scene.anims.generateFrameNumbers(flightSheetKey, {
-          start: 0,
-          end: flightFrames - 1,
-        }),
-        frameRate: 15,
-        repeat: -1,
-      });
-    }
-
-    // 4b. Splash de impacto usando os quadros 3, 4 e 5 originais
-    const hitFrames = 3;
-    const hitCanvas = document.createElement('canvas');
-    hitCanvas.width = fW * hitFrames;
-    hitCanvas.height = fH;
-    const hCtx = hitCanvas.getContext('2d')!;
-    hCtx.imageSmoothingEnabled = false;
-
-    [3, 4, 5].forEach((rawIdx, idx) => {
-      const cellX0 = (rawIdx * src.width) / rawCells;
-      const cellX1 = ((rawIdx + 1) * src.width) / rawCells - 1;
-      const b = this.getBoundsInRegion(src, cellX0, cellX1);
-      const bw = Math.max(1, b.maxX - b.minX + 1);
-      const bh = Math.max(1, b.maxY - b.minY + 1);
-      const cx = idx * fW + fW / 2;
-      const cy = fH / 2;
-      hCtx.drawImage(
-        src,
-        b.minX,
-        b.minY,
-        bw,
-        bh,
-        cx - bw / 2,
-        cy - bh / 2,
-        bw,
-        bh
-      );
-    });
-
-    const hitSheetKey = 'sheet-attack-water-hit';
-    this.registerCanvasSheet(scene, hitSheetKey, hitCanvas, fW, fH, hitFrames);
-
-    if (!scene.anims.exists('anim-attack-water-hit')) {
-      scene.anims.create({
-        key: 'anim-attack-water-hit',
-        frames: scene.anims.generateFrameNumbers(hitSheetKey, {
-          start: 0,
-          end: hitFrames - 1,
-        }),
-        frameRate: 18,
-        repeat: 0,
-      });
-    }
-  }
-
-  // ===================== 5. ESPECIAIS (EXTRAÇÃO POR CLUSTER SEM CORTAR BORDAS) =====================
-
-  private static registerElectricSpecial(scene: Phaser.Scene): void {
-    const src = this.loadChromaKeyedCanvas(scene, 'raw-especial-eletrico', 48, [
-      { x: 0, y: 0, w: 660, h: 108 },
-    ]);
-    if (!src) return;
-
-    const frameCount = 8;
-    const clusters = this.extractSpriteClusters(src, frameCount);
-    const fW = 280;
-    const fH = 280;
-    const out = document.createElement('canvas');
-    out.width = fW * frameCount;
-    out.height = fH;
-    const ctx = out.getContext('2d')!;
-    ctx.imageSmoothingEnabled = false;
-
-    clusters.forEach((b, f) => {
-      const bw = Math.max(1, b.maxX - b.minX + 1);
-      const bh = Math.max(1, b.maxY - b.minY + 1);
-      const scale = Math.min(1, (fW - 16) / bw, (fH - 16) / bh);
-      const dw = bw * scale;
-      const dh = bh * scale;
-      const dx = f * fW + (fW - dw) / 2;
-      const dy = (fH - dh) / 2;
-      ctx.save();
-      ctx.shadowColor = 'rgba(254, 240, 138, 0.95)';
-      ctx.shadowBlur = 12;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
-      ctx.shadowBlur = 0;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
-      ctx.restore();
-    });
-
-    const sheetKey = 'sheet-especial-eletrico';
-    this.registerCanvasSheet(scene, sheetKey, out, fW, fH, frameCount);
-
-    if (!scene.anims.exists('anim-especial-eletrico')) {
-      scene.anims.create({
-        key: 'anim-especial-eletrico',
-        frames: scene.anims.generateFrameNumbers(sheetKey, {
-          start: 0,
-          end: frameCount - 1,
-        }),
-        frameRate: 14,
-        repeat: 0,
-      });
-    }
-  }
-
-  /**
-   * Especial-Fogo.jpeg: 7 jatos de lança-chamas crescendo da esquerda para a direita (+X).
-   * Ancoramos o bico (nozzle) à esquerda de cada quadro para sair exatamente da boca/garra do Pokémon!
+   * ULT Fogo (Charmander/Charizard): Cone Lança-Chamas Devastador Proporcional (76x44)
+   * Ancorado na boca do Pokémon (origem 0.08, 0.5) com cone expansivo de chamas em camadas.
    */
   private static registerFireSpecial(scene: Phaser.Scene): void {
-    const src = this.loadChromaKeyedCanvas(scene, 'raw-especial-fogo', 48, [
-      { x: 0, y: 0, w: 580, h: 108 },
-    ]);
-    if (!src) return;
-
+    const fW = 76;
+    const fH = 44;
     const frameCount = 7;
-    const clusters = this.extractSpriteClusters(src, frameCount);
-    const fW = 310;
-    const fH = 220;
-    const out = document.createElement('canvas');
-    out.width = fW * frameCount;
-    out.height = fH;
-    const ctx = out.getContext('2d')!;
+    const canvas = document.createElement('canvas');
+    canvas.width = fW * frameCount;
+    canvas.height = fH;
+    const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
 
-    clusters.forEach((b, f) => {
-      const bw = Math.max(1, b.maxX - b.minX + 1);
-      const bh = Math.max(1, b.maxY - b.minY + 1);
-      const scale = Math.min(1, (fW - 22) / bw, (fH - 16) / bh);
-      const dw = bw * scale;
-      const dh = bh * scale;
-      const dx = f * fW + 14;
-      const dy = (fH - dh) / 2;
+    for (let f = 0; f < frameCount; f++) {
+      const ox = f * fW;
+      const cy = fH / 2;
+
       ctx.save();
-      ctx.shadowColor = 'rgba(255, 95, 20, 0.95)';
-      ctx.shadowBlur = 12;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
+      ctx.translate(ox, 0);
+
+      const fPhase = (f / frameCount) * Math.PI * 2;
+      const wave1 = Math.sin(fPhase) * 3;
+      const wave2 = Math.cos(fPhase) * 3;
+
+      ctx.shadowColor = 'rgba(239, 68, 68, 0.9)';
+      ctx.shadowBlur = 10;
+
+      // 1. Camada externa: cone expansivo carmesim / rubro
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.moveTo(6, cy - 4);
+      ctx.quadraticCurveTo(35, cy - 18 + wave1, 72, cy - 20 + wave2);
+      ctx.lineTo(70, cy + 20 - wave2);
+      ctx.quadraticCurveTo(35, cy + 18 - wave1, 6, cy + 4);
+      ctx.closePath();
+      ctx.fill();
+
+      // 2. Camada média: chamas alaranjadas vibrantes
+      ctx.fillStyle = '#f97316';
+      ctx.beginPath();
+      ctx.moveTo(7, cy - 3);
+      ctx.quadraticCurveTo(34, cy - 13 + wave1 * 0.7, 68, cy - 14 + wave2 * 0.7);
+      ctx.lineTo(67, cy + 14 - wave2 * 0.7);
+      ctx.quadraticCurveTo(34, cy + 13 - wave1 * 0.7, 7, cy + 3);
+      ctx.closePath();
+      ctx.fill();
+
+      // 3. Camada do núcleo: jato dourado/âmbar incandescente
+      ctx.fillStyle = '#facc15';
+      ctx.beginPath();
+      ctx.moveTo(8, cy - 2);
+      ctx.quadraticCurveTo(32, cy - 7 + wave1 * 0.4, 60, cy - 7);
+      ctx.lineTo(60, cy + 7);
+      ctx.quadraticCurveTo(32, cy + 7 - wave1 * 0.4, 8, cy + 2);
+      ctx.closePath();
+      ctx.fill();
+
+      // 4. Bocal pontiagudo de saída branca incandescente na boca (+X)
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(6, cy - 2);
+      ctx.lineTo(24, cy - 2);
+      ctx.lineTo(28, cy);
+      ctx.lineTo(24, cy + 2);
+      ctx.lineTo(6, cy + 2);
+      ctx.closePath();
+      ctx.fill();
+
+      // 5. Brasas e fagulhas ejetadas para a frente
       ctx.shadowBlur = 0;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
+      ctx.fillStyle = '#fef08a';
+      const sparkOffsets = [
+        { x: 45, y: cy - 12 + wave2 },
+        { x: 58, y: cy + 11 - wave1 },
+        { x: 68, y: cy + wave1 * 0.5 },
+      ];
+      for (const sp of sparkOffsets) {
+        ctx.fillRect(sp.x, sp.y, 2.2, 2.2);
+      }
+
       ctx.restore();
-    });
+    }
 
     const sheetKey = 'sheet-especial-fogo';
-    this.registerCanvasSheet(scene, sheetKey, out, fW, fH, frameCount);
+    this.registerCanvasSheet(scene, sheetKey, canvas, fW, fH, frameCount);
 
     if (!scene.anims.exists('anim-especial-fogo')) {
       scene.anims.create({
         key: 'anim-especial-fogo',
-        frames: scene.anims.generateFrameNumbers(sheetKey, {
-          start: 0,
-          end: frameCount - 1,
-        }),
-        frameRate: 14,
-        repeat: 0,
+        frames: scene.anims.generateFrameNumbers(sheetKey, { start: 0, end: frameCount - 1 }),
+        frameRate: 15,
+        repeat: -1,
       });
     }
   }
 
+  /**
+   * ULT Água (Squirtle/Blastoise): Hidro Vórtice Turbilhão Proporcional (64x64)
+   * 7 quadros com 3 braços espirais de corrente oceânica, olho do turbilhão e cristas brancas de espuma.
+   */
   private static registerWaterSpecial(scene: Phaser.Scene): void {
-    const src = this.loadChromaKeyedCanvas(scene, 'raw-especial-agua', 48, [
-      { x: 0, y: 0, w: 480, h: 108 },
-      { x: 0, y: 334, w: 120, h: 20 },
-    ]);
-    if (!src) return;
-
+    const fW = 64;
+    const fH = 64;
     const frameCount = 7;
-    const clusters = this.extractSpriteClusters(src, frameCount);
-    const fW = 280;
-    const fH = 280;
-    const out = document.createElement('canvas');
-    out.width = fW * frameCount;
-    out.height = fH;
-    const ctx = out.getContext('2d')!;
+    const canvas = document.createElement('canvas');
+    canvas.width = fW * frameCount;
+    canvas.height = fH;
+    const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
 
-    clusters.forEach((b, f) => {
-      const bw = Math.max(1, b.maxX - b.minX + 1);
-      const bh = Math.max(1, b.maxY - b.minY + 1);
-      const scale = Math.min(1, (fW - 16) / bw, (fH - 16) / bh);
-      const dw = bw * scale;
-      const dh = bh * scale;
-      const dx = f * fW + (fW - dw) / 2;
-      const dy = (fH - dh) / 2;
-      ctx.drawImage(src, b.minX, b.minY, bw, bh, dx, dy, dw, dh);
-    });
+    for (let f = 0; f < frameCount; f++) {
+      const cx = f * fW + fW / 2;
+      const cy = fH / 2;
+      const rot = (f * Math.PI * 2) / frameCount;
+
+      ctx.save();
+      ctx.translate(cx, cy);
+
+      ctx.shadowColor = 'rgba(56, 189, 248, 0.9)';
+      ctx.shadowBlur = 9;
+
+      // Olho central do vórtice (azul marinho profundo translúcido)
+      const grad = ctx.createRadialGradient(0, 0, 2, 0, 0, 26);
+      grad.addColorStop(0, 'rgba(8, 47, 73, 0.6)');
+      grad.addColorStop(0.6, 'rgba(2, 132, 199, 0.35)');
+      grad.addColorStop(1, 'rgba(56, 189, 248, 0.1)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, 26, 0, Math.PI * 2);
+      ctx.fill();
+
+      // 3 Braços espirais de correnteza girando em torno do centro
+      for (let i = 0; i < 3; i++) {
+        const armA = rot + (i * Math.PI * 2) / 3;
+
+        // Braço azul celeste
+        ctx.strokeStyle = '#0284c7';
+        ctx.lineWidth = 3.8;
+        ctx.beginPath();
+        for (let step = 0; step < 18; step++) {
+          const t = step / 17;
+          const r = 5 + t * 20;
+          const a = armA + t * 2.2;
+          const px = Math.cos(a) * r;
+          const py = Math.sin(a) * r;
+          if (step === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        // Linha de crista de espuma branca/ciano na borda externa do braço
+        ctx.strokeStyle = '#e0f2fe';
+        ctx.lineWidth = 2.0;
+        ctx.beginPath();
+        for (let step = 6; step < 18; step++) {
+          const t = step / 17;
+          const r = 6 + t * 20;
+          const a = armA + t * 2.2;
+          const px = Math.cos(a) * r;
+          const py = Math.sin(a) * r;
+          if (step === 6) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+      }
+
+      // Gotículas de spray em rotação periférica
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#ffffff';
+      for (let i = 0; i < 6; i++) {
+        const a = rot * 1.5 + (i * Math.PI) / 3;
+        ctx.beginPath();
+        ctx.arc(Math.cos(a) * 25, Math.sin(a) * 25, 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
 
     const sheetKey = 'sheet-especial-agua';
-    this.registerCanvasSheet(scene, sheetKey, out, fW, fH, frameCount);
+    this.registerCanvasSheet(scene, sheetKey, canvas, fW, fH, frameCount);
 
     if (!scene.anims.exists('anim-especial-agua')) {
       scene.anims.create({
         key: 'anim-especial-agua',
-        frames: scene.anims.generateFrameNumbers(sheetKey, {
-          start: 0,
-          end: frameCount - 1,
-        }),
-        frameRate: 13,
-        repeat: 0,
+        frames: scene.anims.generateFrameNumbers(sheetKey, { start: 0, end: frameCount - 1 }),
+        frameRate: 14,
+        repeat: -1,
       });
     }
   }
 
-  // ===================== 6. ATAQUES PROCEDURAIS ELABORADOS (+X) =====================
+  // ===================== 6. ATAQUES PROCEDURAIS FEÉRICOS (+X) =====================
 
-  /**
-   * Spritesheets animados procedurais para Fada/Som (Crescente Estelar + Notas)
-   * e Chicote de Vinha, ambos estritamente orientados para a DIREITA (+X).
-   */
-  private static registerProceduralFairyAndVineAttacks(
-    scene: Phaser.Scene
-  ): void {
-    // 6a. Onda Crescente Feérica / Som (4 quadros apontando para +X)
+  private static registerProceduralFairyAndVineAttacks(scene: Phaser.Scene): void {
     const fCount = 4;
-    const fW = 112;
-    const fH = 92;
+    const fW = 36;
+    const fH = 20;
     const fairyCanvas = document.createElement('canvas');
     fairyCanvas.width = fW * fCount;
     fairyCanvas.height = fH;
     const fCtx = fairyCanvas.getContext('2d')!;
+    fCtx.imageSmoothingEnabled = false;
 
     for (let f = 0; f < fCount; f++) {
-      const cx = f * fW + fW / 2 + 6;
+      const ox = f * fW;
       const cy = fH / 2;
-      const pulse = 1 + Math.sin((f / fCount) * Math.PI * 2) * 0.08;
+      const wobble = (f % 2 === 0 ? 1 : -1) * 1.2;
 
-      // Rastro estelar rosado em -X
-      const wake = fCtx.createLinearGradient(cx - 52, cy, cx + 18, cy);
-      wake.addColorStop(0, 'rgba(244, 114, 182, 0)');
-      wake.addColorStop(0.6, 'rgba(251, 113, 133, 0.38)');
-      wake.addColorStop(1, 'rgba(255, 228, 230, 0.85)');
-      fCtx.fillStyle = wake;
-      fCtx.beginPath();
-      fCtx.ellipse(cx - 14, cy, 38, 16 * pulse, 0, 0, Math.PI * 2);
-      fCtx.fill();
-
-      // Lâmina crescente feérica apontando para +X
       fCtx.save();
-      fCtx.translate(cx + 8, cy);
-      fCtx.fillStyle = '#ff4d8d';
+      fCtx.translate(ox, 0);
+
+      fCtx.shadowColor = 'rgba(244, 114, 182, 0.85)';
+      fCtx.shadowBlur = 6;
+
+      // Fita musical rosada / lilás apontando para +X
+      fCtx.fillStyle = '#f472b6';
       fCtx.beginPath();
-      fCtx.arc(0, 0, 26 * pulse, -1.15, 1.15, false);
-      fCtx.arc(-10, 0, 23 * pulse, 1.05, -1.05, true);
+      fCtx.moveTo(32, cy);
+      fCtx.quadraticCurveTo(20, cy - 6 + wobble, 6, cy);
+      fCtx.quadraticCurveTo(20, cy + 6 - wobble, 32, cy);
       fCtx.closePath();
       fCtx.fill();
 
-      fCtx.strokeStyle = '#fff1f2';
-      fCtx.lineWidth = 2.5;
-      fCtx.stroke();
+      // Núcleo branco / marfim suave
+      fCtx.fillStyle = '#fff1f2';
+      fCtx.beginPath();
+      fCtx.moveTo(31, cy);
+      fCtx.quadraticCurveTo(21, cy - 3.5, 12, cy);
+      fCtx.quadraticCurveTo(21, cy + 3.5, 31, cy);
+      fCtx.closePath();
+      fCtx.fill();
 
-      // Estrela brilhante na ponta frontal (+X)
-      this.drawStar(fCtx, 18, (f % 2 === 0 ? -1 : 1) * 3, 7, 3, '#fef08a');
+      // Estrela reluzente de 4 pontas na ponta frontal (+X)
+      this.drawStar(fCtx, 31, cy, 5.5, 2.2, '#fef08a');
+
+      // Gotas de poeira estelar
+      fCtx.shadowBlur = 0;
+      fCtx.fillStyle = '#fbcfe8';
+      fCtx.fillRect(4, cy - 2 * wobble, 1.8, 1.8);
+      fCtx.fillRect(8, cy + 3 * wobble, 1.6, 1.6);
+
       fCtx.restore();
     }
 
     const fairySheet = 'sheet-attack-fairy';
     this.registerCanvasSheet(scene, fairySheet, fairyCanvas, fW, fH, fCount);
+
     if (!scene.anims.exists('anim-attack-fairy')) {
       scene.anims.create({
         key: 'anim-attack-fairy',
-        frames: scene.anims.generateFrameNumbers(fairySheet, {
-          start: 0,
-          end: fCount - 1,
-        }),
+        frames: scene.anims.generateFrameNumbers(fairySheet, { start: 0, end: fCount - 1 }),
         frameRate: 15,
         repeat: -1,
       });
     }
   }
+
 
   // ===================== 7. ÍCONES PROFISSIONAIS DE ATAQUES E HABILIDADES =====================
 
