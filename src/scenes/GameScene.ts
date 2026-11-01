@@ -6,8 +6,10 @@ import {
 } from '../config/abilities';
 import { GAME_SETTINGS } from '../config/gameConfig';
 import {
-  BOSS_ID,
+  BOSS_GEODUDE_ID,
+  BOSS_ONIX_ID,
   ENEMY_IDS,
+  MAP_MINIBOSS_CONFIGS,
   MAX_PLAYER_LEVEL,
 } from '../config/pokemonManifest';
 import { Enemy } from '../entities/Enemy';
@@ -52,6 +54,12 @@ export class GameScene extends Phaser.Scene {
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private processedDeaths = new WeakSet<Enemy>();
 
+  private currentMiniboss: Enemy | null = null;
+  private minibossSpawned = false;
+  private minibossDefeated = false;
+  private minibossKillsInMap = 0;
+
+  private bossPhase: 1 | 2 = 1;
   private bossEnemy: Enemy | null = null;
   private bossEncounterStarted = false;
   private bossDefeated = false;
@@ -130,6 +138,11 @@ export class GameScene extends Phaser.Scene {
     this.enemies = [];
     this.xpOrbs = [];
     this.processedDeaths = new WeakSet<Enemy>();
+    this.currentMiniboss = null;
+    this.minibossSpawned = false;
+    this.minibossDefeated = false;
+    this.minibossKillsInMap = 0;
+    this.bossPhase = 1;
     this.bossEnemy = null;
     this.bossEncounterStarted = false;
     this.bossDefeated = false;
@@ -233,6 +246,7 @@ export class GameScene extends Phaser.Scene {
 
     const dtSeconds = delta / 1000;
     this.runTimeSeconds += dtSeconds;
+    this.mapManager.update(delta);
 
     const actions = this.player.update(delta);
     if (actions.specialUsed) {
@@ -253,21 +267,27 @@ export class GameScene extends Phaser.Scene {
       this.player.setSwimming(inWater);
     }
 
-    // 1. Tempo do mapa e transição conectada com pontezinha
+    // 1. Tempo do mapa, Miniboss e transição conectada com pontezinha
     if (!this.mapManager.isBossMapActive()) {
-      if (!this.mapManager.isNextMapGateOpen()) {
+      // Condição de Miniboss: surge aos 24s de exploração OU após 14 abates no mapa
+      if (!this.minibossSpawned) {
         this.mapElapsedSeconds += dtSeconds;
-        if (this.mapElapsedSeconds >= GAME_SETTINGS.MAP_DURATION_SECONDS) {
-          this.openNextMapPassage();
+        if (this.mapElapsedSeconds >= 24 || this.minibossKillsInMap >= 14) {
+          this.minibossSpawned = true;
+          this.spawnCurrentMapMiniboss();
         }
-        this.compassText.setVisible(false);
-      } else {
+      }
+
+      // A passagem só é aberta e apontada pela bússola após derrotar o Miniboss do mapa
+      if (this.minibossDefeated && this.mapManager.isNextMapGateOpen()) {
         const enteredMapDef = this.mapManager.checkPlayerEnteredNextMap(px, py);
         if (enteredMapDef) {
           this.onPlayerCompletedMapTransition(enteredMapDef.name);
         } else {
           this.updateCompassIndicator(px, py);
         }
+      } else {
+        this.compassText.setVisible(false);
       }
     } else {
       this.compassText.setVisible(false);
@@ -305,12 +325,21 @@ export class GameScene extends Phaser.Scene {
         enemy.sprite.y
       );
 
-      // Despawn por distância: caso o jogador se distancie demais (>640px), o inimigo some e novos aparecem perto
+      // Despawn por distância: inimigos comuns somem se ficarem muito distantes (>640px)
       const DESPAWN_DISTANCE = 640;
-      if (!enemy.isBoss && distToPlayer > DESPAWN_DISTANCE) {
+      if (!enemy.isBoss && !enemy.isMiniboss && distToPlayer > DESPAWN_DISTANCE) {
         enemy.destroy();
         this.spawnWildPokemon();
         return false;
+      }
+
+      // Miniboss persegue ativamente o jogador se ficar longe (>750px)
+      if (enemy.isMiniboss && distToPlayer > 750) {
+        const repAngle = Phaser.Math.Angle.Between(px, py, enemy.sprite.x, enemy.sprite.y);
+        const repX = px + Math.cos(repAngle) * 320;
+        const repY = py + Math.sin(repAngle) * 320;
+        const safePos = this.mapManager.findNearestWalkablePosition(repX, repY);
+        enemy.sprite.setPosition(safePos.x, safePos.y);
       }
 
       enemy.update(
@@ -339,6 +368,8 @@ export class GameScene extends Phaser.Scene {
         if (distToPlayer <= enemy.getContactRadius()) {
           const contactDmg = enemy.isBoss
             ? 22
+            : enemy.isMiniboss
+            ? 14 + this.mapManager.mapsCleared * 2
             : 8 + this.mapManager.mapsCleared * 2;
           this.player.receiveDamage(contactDmg, enemy);
         }
@@ -354,7 +385,8 @@ export class GameScene extends Phaser.Scene {
     if (this.pendingAbilityPicks > 0 && !this.isModalOpen) {
       this.openAbilityChoiceModal();
     } else if (
-      this.player.level >= MAX_PLAYER_LEVEL &&
+      (this.player.level >= MAX_PLAYER_LEVEL ||
+        this.mapManager.mapsCleared >= 6) &&
       !this.bossEncounterStarted &&
       !this.isModalOpen
     ) {
@@ -372,10 +404,77 @@ export class GameScene extends Phaser.Scene {
     const y = enemy.sprite.y;
     this.defeatedCount++;
 
+    // 1. Chefes da Arena Final (Fase 1: Geodude -> Fase 2: Onix)
     if (enemy.isBoss) {
-      this.onBossDefeated();
+      if (this.bossPhase === 1) {
+        // Geodude derrotado! Dropa 10 orbes dourados de XP e inicia o tremor de terra
+        for (let i = 0; i < 10; i++) {
+          const ox = x + Phaser.Math.Between(-40, 40);
+          const oy = y + Phaser.Math.Between(-40, 40);
+          const orbGfx = this.add
+            .circle(ox, oy, 8, 0xffd700, 1)
+            .setStrokeStyle(2.5, 0xfffbeb, 1)
+            .setDepth(DEPTH.XP_ORB);
+          this.xpOrbs.push({
+            gfx: orbGfx,
+            x: ox,
+            y: oy,
+            xpAmount: 22,
+            isGolden: true,
+            ageMs: 0,
+          });
+        }
+
+        this.bossEnemy = null;
+        this.cameras.main.shake(650, 0.012);
+        this.cameras.main.flash(450, 255, 230, 120);
+        this.showBanner('💥 GEODUDE DERROTADO! O SOLO ESTÁ RACHANDO... ONIX ESTÁ DESPERTANDO!');
+
+        this.time.delayedCall(2200, () => {
+          if (this.player.isDead) return;
+          this.bossPhase = 2;
+          const { bossSpawn } = this.mapManager.getBossArenaSpawns();
+          this.spawnBossOnix(bossSpawn.x, bossSpawn.y);
+        });
+        return;
+      } else {
+        // Fase 2: Onix derrotado! Vitória definitiva
+        this.onBossDefeated();
+        return;
+      }
+    }
+
+    // 2. Miniboss do Mapa Derrotado: Desbloqueia a ponte para o próximo mapa!
+    if (enemy === this.currentMiniboss || enemy.isMiniboss) {
+      this.minibossDefeated = true;
+      this.currentMiniboss = null;
+
+      // Dropa recompensa substancial de 5 orbes dourados
+      for (let i = 0; i < 5; i++) {
+        const ox = x + Phaser.Math.Between(-32, 32);
+        const oy = y + Phaser.Math.Between(-32, 32);
+        const orbGfx = this.add
+          .circle(ox, oy, 7.5, 0xffd700, 1)
+          .setStrokeStyle(2.5, 0xfffbeb, 1)
+          .setDepth(DEPTH.XP_ORB);
+        this.xpOrbs.push({
+          gfx: orbGfx,
+          x: ox,
+          y: oy,
+          xpAmount: 20,
+          isGolden: true,
+          ageMs: 0,
+        });
+      }
+
+      this.cameras.main.shake(450, 0.008);
+      this.showBanner('🎉 MINIBOSS DERROTADO! A PASSAGEM PARA O PRÓXIMO MAPA FOI DESBLOQUEADA!');
+      this.openNextMapPassage();
       return;
     }
+
+    // 3. Inimigos Comuns: orbes rebalanceados para maior desafio e progressão consistente
+    this.minibossKillsInMap++;
 
     const bountyLvl = this.player.getAbilityLevel('bounty');
     const isGolden = bountyLvl > 0 && Math.random() < bountyLvl * 0.14;
@@ -394,7 +493,7 @@ export class GameScene extends Phaser.Scene {
       gfx: orbGfx,
       x,
       y,
-      xpAmount: isGolden ? 28 : 10,
+      xpAmount: isGolden ? 20 : 7,
       isGolden,
       ageMs: 0,
     });
@@ -445,6 +544,7 @@ export class GameScene extends Phaser.Scene {
   private triggerBossArenaTransition(): void {
     if (this.bossEncounterStarted) return;
     this.bossEncounterStarted = true;
+    this.bossPhase = 1;
 
     this.clearAllActiveEnemiesAndOrbs();
     this.compassText.setVisible(false);
@@ -453,14 +553,15 @@ export class GameScene extends Phaser.Scene {
     this.player.teleportTo(playerSpawn.x, playerSpawn.y);
     this.cameras.main.flash(380, 255, 255, 255);
 
-    this.spawnBossOnix(bossSpawn.x, bossSpawn.y);
+    // Inicia a Fase 1 com o Geodude
+    this.spawnBossGeodude(bossSpawn.x, bossSpawn.y);
   }
 
-  private spawnBossOnix(bossX: number, bossY: number): void {
+  private spawnBossGeodude(bossX: number, bossY: number): void {
     if (this.bossEnemy && !this.bossEnemy.isDead) return;
 
     const hpMultiplier = 1 + (this.player.level - 1) * 0.12;
-    this.bossEnemy = new Enemy(this, bossX, bossY, BOSS_ID, hpMultiplier);
+    this.bossEnemy = new Enemy(this, bossX, bossY, BOSS_GEODUDE_ID, hpMultiplier);
     this.enemies.push(this.bossEnemy);
     this.enemyGroup.add(this.bossEnemy.sprite);
 
@@ -471,7 +572,69 @@ export class GameScene extends Phaser.Scene {
 
     this.cameras.main.shake(420, 0.008);
     this.bossHudContainer.setVisible(true);
-    this.showBanner('👑 ARENA FINAL! DERROTE O BOSS ONIX PARA VENCER!');
+    this.showBanner('⚔️ CHEFE 1/2: GEODUDE DESAFIA VOCÊ! DERROTE-O!');
+  }
+
+  private spawnBossOnix(bossX: number, bossY: number): void {
+    if (this.bossEnemy && !this.bossEnemy.isDead) return;
+
+    const hpMultiplier = 1 + (this.player.level - 1) * 0.15;
+    this.bossEnemy = new Enemy(this, bossX, bossY, BOSS_ONIX_ID, hpMultiplier);
+    this.enemies.push(this.bossEnemy);
+    this.enemyGroup.add(this.bossEnemy.sprite);
+
+    this.player.hp = Math.min(
+      this.player.maxHp,
+      this.player.hp + Math.round(this.player.maxHp * 0.4)
+    );
+
+    this.cameras.main.shake(550, 0.012);
+    this.bossHudContainer.setVisible(true);
+    this.showBanner('👑 CHEFE FINAL 2/2: ONIX GIGANTE DESPERTOU! DERROTE-O PARA VENCER!');
+  }
+
+  private spawnCurrentMapMiniboss(): void {
+    if (this.currentMiniboss && !this.currentMiniboss.isDead) return;
+
+    const currentDef = this.mapManager.getCurrentMapDefinition();
+    const cfg = MAP_MINIBOSS_CONFIGS[currentDef.key] ?? {
+      id: '0002',
+      name: 'Ivysaur Alfa',
+      title: '🌱 Guardião da Floresta',
+      element: 'planta',
+    };
+
+    const bounds = this.mapManager.getCurrentMapBounds();
+    const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+    const distance = 250;
+    const rawX = Phaser.Math.Clamp(
+      this.player.sprite.x + Math.cos(angle) * distance,
+      bounds.x + 64,
+      bounds.x + bounds.width - 64
+    );
+    const rawY = Phaser.Math.Clamp(
+      this.player.sprite.y + Math.sin(angle) * distance,
+      bounds.y + 64,
+      bounds.y + bounds.height - 64
+    );
+    const spawnPos = this.mapManager.findNearestWalkablePosition(rawX, rawY);
+
+    const hpMultiplier =
+      (1 + this.mapManager.mapsCleared * 0.35 + (this.player.level - 1) * 0.12) * 1.2;
+
+    this.currentMiniboss = new Enemy(
+      this,
+      spawnPos.x,
+      spawnPos.y,
+      cfg.id,
+      hpMultiplier,
+      true // isMiniboss = true
+    );
+    this.enemies.push(this.currentMiniboss);
+    this.enemyGroup.add(this.currentMiniboss.sprite);
+
+    this.cameras.main.shake(380, 0.007);
+    this.showBanner(`⚠️ MINIBOSS APROXIMANDO-SE: ${cfg.title}! Derrote-o para desbloquear a ponte!`);
   }
 
   private onBossDefeated(): void {
@@ -1323,6 +1486,10 @@ export class GameScene extends Phaser.Scene {
 
   private onPlayerCompletedMapTransition(newMapName: string): void {
     this.mapElapsedSeconds = 0;
+    this.minibossSpawned = false;
+    this.minibossDefeated = false;
+    this.currentMiniboss = null;
+    this.minibossKillsInMap = 0;
     this.compassText.setVisible(false);
 
     const bounds = this.mapManager.getCurrentMapBounds();
@@ -2132,17 +2299,39 @@ export class GameScene extends Phaser.Scene {
       `Derrotados: ${this.defeatedCount}   Inimigos: ${this.enemies.length}`
     );
 
-    // 9. Barra do Boss Onix
+    // 9. Barra de Chefe (Geodude / Onix) ou Miniboss do Mapa
     if (this.bossEnemy && !this.bossEnemy.isDead) {
       this.bossHudContainer.setVisible(true);
+      this.bossHpBarFill.setFillStyle(0xd97706);
       const bossRatio = Phaser.Math.Clamp(
         this.bossEnemy.hp / Math.max(1, this.bossEnemy.maxHp),
         0,
         1
       );
       this.bossHpBarFill.width = 422 * bossRatio;
+      if (this.bossPhase === 1) {
+        this.bossHpText.setText(
+          `⚔️ CHEFE 1/2: GEODUDE — HP: ${Math.ceil(this.bossEnemy.hp)} / ${this.bossEnemy.maxHp}`
+        );
+      } else {
+        this.bossHpText.setText(
+          `👑 CHEFE FINAL 2/2: ONIX — HP: ${Math.ceil(this.bossEnemy.hp)} / ${this.bossEnemy.maxHp}`
+        );
+      }
+    } else if (this.currentMiniboss && !this.currentMiniboss.isDead) {
+      this.bossHudContainer.setVisible(true);
+      this.bossHpBarFill.setFillStyle(0xe11d48);
+      const miniRatio = Phaser.Math.Clamp(
+        this.currentMiniboss.hp / Math.max(1, this.currentMiniboss.maxHp),
+        0,
+        1
+      );
+      this.bossHpBarFill.width = 422 * miniRatio;
+      const curDef = this.mapManager.getCurrentMapDefinition();
+      const cfg = MAP_MINIBOSS_CONFIGS[curDef.key];
+      const name = cfg ? cfg.name.toUpperCase() : 'MINIBOSS';
       this.bossHpText.setText(
-        `👑 BOSS ONIX — HP: ${Math.ceil(this.bossEnemy.hp)} / ${this.bossEnemy.maxHp}`
+        `⚠️ MINIBOSS: ${name} — HP: ${Math.ceil(this.currentMiniboss.hp)} / ${this.currentMiniboss.maxHp}`
       );
     } else {
       this.bossHudContainer.setVisible(false);

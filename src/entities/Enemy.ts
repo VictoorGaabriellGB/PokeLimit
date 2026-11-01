@@ -22,6 +22,10 @@ export class Enemy {
   private currentState: PokemonAnimType = 'Walk';
 
   public readonly isBoss: boolean;
+  public readonly isMiniboss: boolean;
+  private minibossAura: Phaser.GameObjects.Arc | null = null;
+  private minibossSkillTimerMs = 0;
+  private geodudeAttackCycle = 0;
   public hp: number;
   public readonly maxHp: number;
   public isDead = false;
@@ -42,34 +46,45 @@ export class Enemy {
     x: number,
     y: number,
     pokemonId: string,
-    hpMultiplier = 1
+    hpMultiplier = 1,
+    isMiniboss = false
   ) {
     this.scene = scene;
     this.pokemonDef = POKEMON_MANIFEST[pokemonId];
-    this.isBoss = this.pokemonDef.role === 'boss';
-    this.maxHp = Math.round(this.pokemonDef.baseHp * hpMultiplier);
+    this.isBoss = this.pokemonDef.role === "boss";
+    this.isMiniboss = isMiniboss;
+    this.maxHp = Math.round(
+      this.pokemonDef.baseHp * hpMultiplier * (isMiniboss ? 3.6 : 1)
+    );
     this.hp = this.maxHp;
 
     this.shadow = scene.add
       .ellipse(
         x,
-        y + (this.isBoss ? 22 : 10),
-        this.isBoss ? 64 : 22,
-        this.isBoss ? 22 : 9,
+        y + (this.isBoss ? 22 : isMiniboss ? 14 : 10),
+        this.isBoss ? 64 : isMiniboss ? 34 : 22,
+        this.isBoss ? 22 : isMiniboss ? 13 : 9,
         0x000000,
-        this.isBoss ? 0.45 : 0.3
+        this.isBoss ? 0.45 : isMiniboss ? 0.4 : 0.3
       )
       .setDepth(DEPTH.SHADOW);
 
-    const initialTex = PokemonAnimationManager.getTextureKey(pokemonId, 'Walk');
+    if (this.isMiniboss) {
+      this.minibossAura = scene.add
+        .circle(x, y + 12, 26, 0xf59e0b, 0.35)
+        .setStrokeStyle(2.5, 0xfef08a, 0.9)
+        .setDepth(DEPTH.SHADOW + 1);
+    }
+
+    const initialTex = PokemonAnimationManager.getTextureKey(pokemonId, "Walk");
     this.sprite = scene.physics.add
       .sprite(x, y, initialTex, 0)
-      .setScale(this.pokemonDef.scale)
+      .setScale(this.pokemonDef.scale * (this.isMiniboss ? 1.35 : 1))
       .setDepth(depthForY(y));
 
     this.sprite.setCollideWorldBounds(true);
     (this.sprite as any).enemyRef = this;
-    this.sprite.setData('enemy', this);
+    this.sprite.setData("enemy", this);
     this.syncHitbox();
     this.playAnim(true);
   }
@@ -79,7 +94,7 @@ export class Enemy {
   }
 
   getContactRadius(): number {
-    return this.isBoss ? 38 : 20;
+    return this.isBoss ? 38 : this.isMiniboss ? 26 : 20;
   }
 
     canFly(): boolean {
@@ -220,12 +235,25 @@ export class Enemy {
       );
     }
 
-    // Ataques especiais periódicos do Boss Onix
+    // Ataques periódicos de Chefes (Geodude e Onix) e Minibosses
     if (this.isBoss && !this.isIncapacitated()) {
       this.bossSkillTimerMs += delta;
-      if (this.bossSkillTimerMs >= 2900) {
+      const interval = this.pokemonDef.id === "0074" ? 2400 : 2900;
+      if (this.bossSkillTimerMs >= interval) {
         this.bossSkillTimerMs = 0;
-        this.executeBossSkill(targetX, targetY, onBossHazardHitPlayer);
+        if (this.pokemonDef.id === "0074") {
+          this.executeGeodudeSkill(targetX, targetY, onBossHazardHitPlayer);
+        } else {
+          this.executeBossSkill(targetX, targetY, onBossHazardHitPlayer);
+        }
+      }
+    }
+
+    if (this.isMiniboss && !this.isIncapacitated()) {
+      this.minibossSkillTimerMs += delta;
+      if (this.minibossSkillTimerMs >= 3200) {
+        this.minibossSkillTimerMs = 0;
+        this.executeMinibossSkill(targetX, targetY, onBossHazardHitPlayer);
       }
     }
 
@@ -342,7 +370,243 @@ export class Enemy {
     }
   }
 
-  applyStatusEffect(options: {
+  /**
+   * Golpes únicos do Boss Geodude (DIFERENTES do Onix):
+   * 1. Rollout Charge: Investida veloz em linha reta com aviso no solo e dano de atropelamento.
+   * 2. Rock Blast: Disparo de 6 estilhaços pontiagudos de rocha em leque.
+   */
+  private executeGeodudeSkill(
+    targetX: number,
+    targetY: number,
+    onHitPlayer?: (damage: number) => void
+  ): void {
+    this.currentState = 'Attack';
+    this.playAnim(true);
+
+    const gx = this.sprite.x;
+    const gy = this.sprite.y;
+    this.geodudeAttackCycle = (this.geodudeAttackCycle + 1) % 2;
+
+    if (this.geodudeAttackCycle === 0) {
+      // 1. ROLLOUT / INVESTIDA GIRATÓRIA
+      this.scene.cameras.main.shake(180, 0.003);
+
+      const ang = Math.atan2(targetY - gy, targetX - gx);
+      const chargeDist = 260;
+      const destX = gx + Math.cos(ang) * chargeDist;
+      const destY = gy + Math.sin(ang) * chargeDist;
+
+      const pathLine = this.scene.add.graphics().setDepth(DEPTH.SHADOW + 1);
+      pathLine.lineStyle(18, 0xd97706, 0.3);
+      pathLine.beginPath();
+      pathLine.moveTo(gx, gy);
+      pathLine.lineTo(destX, destY);
+      pathLine.strokePath();
+
+      const dust = this.scene.add
+        .circle(gx, gy, 24, 0x78716c, 0.45)
+        .setStrokeStyle(2.5, 0xd6d3d1, 0.8)
+        .setDepth(DEPTH.EFFECTS);
+      this.scene.tweens.add({
+        targets: dust,
+        scale: 1.6,
+        alpha: 0,
+        duration: 350,
+        onComplete: () => dust.destroy(),
+      });
+
+      this.scene.time.delayedCall(380, () => {
+        pathLine.destroy();
+        if (this.isDead || !this.sprite.active) return;
+
+        this.sprite.setVelocity(Math.cos(ang) * 440, Math.sin(ang) * 440);
+
+        for (let s = 0; s < 5; s++) {
+          this.scene.time.delayedCall(s * 70, () => {
+            if (!this.sprite.active || this.isDead) return;
+            const puff = this.scene.add
+              .circle(
+                this.sprite.x + Phaser.Math.Between(-8, 8),
+                this.sprite.y + Phaser.Math.Between(-8, 8),
+                Phaser.Math.Between(6, 12),
+                0xa8a29e,
+                0.6
+              )
+              .setDepth(DEPTH.EFFECTS);
+            this.scene.tweens.add({
+              targets: puff,
+              scale: 1.8,
+              alpha: 0,
+              duration: 220,
+              onComplete: () => puff.destroy(),
+            });
+          });
+        }
+
+        this.scene.time.delayedCall(200, () => {
+          if (this.isDead || !this.sprite.active) return;
+          const distToPlayer = Math.hypot(this.sprite.x - targetX, this.sprite.y - targetY);
+          if (distToPlayer <= 56 && onHitPlayer) {
+            onHitPlayer(14);
+            this.scene.cameras.main.shake(260, 0.007);
+          }
+        });
+      });
+    } else {
+      // 2. ROCK BLAST / ESTILHAÇOS DE PEDRA EM LEQUE
+      this.scene.cameras.main.shake(220, 0.004);
+
+      const ring = this.scene.add
+        .circle(gx, gy, 18, 0x78716c, 0.5)
+        .setStrokeStyle(3, 0xf59e0b, 0.9)
+        .setDepth(DEPTH.EFFECTS);
+      this.scene.tweens.add({
+        targets: ring,
+        radius: 65,
+        alpha: 0,
+        duration: 320,
+        onComplete: () => ring.destroy(),
+      });
+
+      const baseAngle = Math.atan2(targetY - gy, targetX - gx);
+      for (let i = 0; i < 6; i++) {
+        const spreadAngle = baseAngle + (i - 2.5) * 0.28;
+        const shard = this.scene.add
+          .circle(gx, gy, 7, 0x57534e, 1)
+          .setStrokeStyle(2, 0xd6d3d1, 1)
+          .setDepth(DEPTH.EFFECTS + 2);
+
+        const travelDist = 260;
+        const endX = gx + Math.cos(spreadAngle) * travelDist;
+        const endY = gy + Math.sin(spreadAngle) * travelDist;
+
+        this.scene.tweens.add({
+          targets: shard,
+          x: endX,
+          y: endY,
+          duration: 620,
+          ease: 'Linear',
+          onUpdate: () => {
+            if (shard.active) {
+              const d = Math.hypot(shard.x - targetX, shard.y - targetY);
+              if (d <= 24 && onHitPlayer) {
+                shard.destroy();
+                onHitPlayer(11);
+              }
+            }
+          },
+          onComplete: () => {
+            if (shard.active) {
+              const burst = this.scene.add
+                .circle(shard.x, shard.y, 8, 0xa8a29e, 0.7)
+                .setDepth(DEPTH.EFFECTS);
+              this.scene.tweens.add({
+                targets: burst,
+                radius: 18,
+                alpha: 0,
+                duration: 180,
+                onComplete: () => burst.destroy(),
+              });
+              shard.destroy();
+            }
+          },
+        });
+      }
+    }
+  }
+
+  /**
+   * Habilidade especial exclusiva de Miniboss por elemento
+   */
+  private executeMinibossSkill(
+    targetX: number,
+    targetY: number,
+    onHitPlayer?: (damage: number) => void
+  ): void {
+    this.currentState = 'Attack';
+    this.playAnim(true);
+
+    const mx = this.sprite.x;
+    const my = this.sprite.y;
+    const baseAngle = Math.atan2(targetY - my, targetX - mx);
+
+    let projColor = 0xf59e0b;
+    let projBorder = 0xfef08a;
+    const id = this.pokemonDef.id;
+
+    if (id === '0002') {
+      // Ivysaur: folhas venenosas
+      projColor = 0x4ade80;
+      projBorder = 0x15803d;
+    } else if (id === '0005') {
+      // Charmeleon: chamas
+      projColor = 0xf97316;
+      projBorder = 0xdc2626;
+    } else if (id === '0008') {
+      // Wartortle: jatos d'água
+      projColor = 0x38bdf8;
+      projBorder = 0x0284c7;
+    } else if (id === '0026') {
+      // Raichu: faíscas
+      projColor = 0xfacc15;
+      projBorder = 0x67e8f9;
+    } else if (id === '0041') {
+      // Golbat: ondas supersônicas
+      projColor = 0xa855f7;
+      projBorder = 0xe9d5ff;
+    } else if (id === '0040') {
+      // Wigglytuff: esferas melódicas
+      projColor = 0xf472b6;
+      projBorder = 0xfff1f2;
+    }
+
+    // Alerta sutil no chão
+    const ring = this.scene.add
+      .circle(mx, my, 14, projColor, 0.4)
+      .setStrokeStyle(2, projBorder, 0.9)
+      .setDepth(DEPTH.EFFECTS);
+    this.scene.tweens.add({
+      targets: ring,
+      radius: 46,
+      alpha: 0,
+      duration: 280,
+      onComplete: () => ring.destroy(),
+    });
+
+    // Dispara 3 projéteis elementais em leque em direção ao jogador
+    for (let i = 0; i < 3; i++) {
+      const ang = baseAngle + (i - 1) * 0.32;
+      const proj = this.scene.add
+        .circle(mx, my, 6, projColor, 1)
+        .setStrokeStyle(2, projBorder, 1)
+        .setDepth(DEPTH.EFFECTS + 2);
+
+      const dist = 240;
+      const endX = mx + Math.cos(ang) * dist;
+      const endY = my + Math.sin(ang) * dist;
+
+      this.scene.tweens.add({
+        targets: proj,
+        x: endX,
+        y: endY,
+        duration: 580,
+        onUpdate: () => {
+          if (proj.active) {
+            const d = Math.hypot(proj.x - targetX, proj.y - targetY);
+            if (d <= 22 && onHitPlayer) {
+              proj.destroy();
+              onHitPlayer(10);
+            }
+          }
+        },
+        onComplete: () => {
+          if (proj.active) proj.destroy();
+        },
+      });
+    }
+  }
+
+    applyStatusEffect(options: {
     slowFactor?: number;
     slowDurationMs?: number;
     dotDamagePerSec?: number;
@@ -452,6 +716,10 @@ export class Enemy {
     this.isDead = true;
     this.clearSleepIcon();
     this.shadow.destroy();
+    if (this.minibossAura) {
+      this.minibossAura.destroy();
+      this.minibossAura = null;
+    }
     this.sprite.destroy();
   }
 
@@ -460,6 +728,9 @@ export class Enemy {
       this.sprite.x,
       this.sprite.y + (this.isBoss ? 24 : 10)
     );
+    if (this.minibossAura) {
+      this.minibossAura.setPosition(this.sprite.x, this.sprite.y + 12);
+    }
     this.sprite.setDepth(depthForY(this.sprite.y));
   }
 
@@ -502,13 +773,20 @@ export class Enemy {
     this.sprite.body.enable = false;
     this.clearSleepIcon();
 
+    const targets: Phaser.GameObjects.GameObject[] = [this.sprite, this.shadow];
+    if (this.minibossAura) targets.push(this.minibossAura);
+
     this.scene.tweens.add({
-      targets: [this.sprite, this.shadow],
+      targets,
       alpha: 0,
       scale: 0.3,
       duration: this.isBoss ? 550 : 220,
       onComplete: () => {
         this.shadow.destroy();
+        if (this.minibossAura) {
+          this.minibossAura.destroy();
+          this.minibossAura = null;
+        }
         this.sprite.destroy();
       },
     });
@@ -527,7 +805,7 @@ export class Enemy {
   }
 
   private syncHitbox(): void {
-    const radius = this.isBoss ? BOSS_HITBOX_RADIUS : ENEMY_HITBOX_RADIUS;
+    const radius = this.isBoss ? BOSS_HITBOX_RADIUS : this.isMiniboss ? 15 : ENEMY_HITBOX_RADIUS;
     const cfg = this.pokemonDef.anims[this.currentState];
     const offsetX = cfg.frameWidth / 2 - radius;
     const offsetY = cfg.frameHeight / 2 - radius + (this.isBoss ? 10 : 4);

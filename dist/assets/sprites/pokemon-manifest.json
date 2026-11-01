@@ -817,5 +817,49 @@
         ]
       }
     }
+  },
+  "0074": {
+    "id": "0074",
+    "name": "Geodude",
+    "anims": {
+      "Walk": {
+        "file": "assets/sprites/0074/Walk-Anim.png",
+        "frameWidth": 56,
+        "frameHeight": 56,
+        "frameCount": 4,
+        "durations": [
+          10,
+          12,
+          10,
+          12
+        ]
+      },
+      "Idle": {
+        "file": "assets/sprites/0074/Idle-Anim.png",
+        "frameWidth": 56,
+        "frameHeight": 56,
+        "frameCount": 4,
+        "durations": [
+          14,
+          16,
+          14,
+          16
+        ]
+      },
+      "Attack": {
+        "file": "assets/sprites/0074/Attack-Anim.png",
+        "frameWidth": 56,
+        "frameHeight": 56,
+        "frameCount": 6,
+        "durations": [
+          8,
+          8,
+          12,
+          10,
+          8,
+          8
+        ]
+      }
+    }
   }
 }

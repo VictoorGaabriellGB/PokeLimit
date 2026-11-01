@@ -127,7 +127,7 @@ export class Player {
 
   public level = 1;
   public xp = 0;
-  public xpToNextLevel = 50;
+  public xpToNextLevel = 75;
 
   public maxHp: number;
   public hp: number;
@@ -488,7 +488,7 @@ export class Player {
     while (this.xp >= this.xpToNextLevel) {
       this.xp -= this.xpToNextLevel;
       this.level++;
-      this.xpToNextLevel = Math.round(this.xpToNextLevel * 1.35);
+      this.xpToNextLevel = Math.round(this.xpToNextLevel * 1.38);
       levelsGained++;
 
       const evoId = this.pokemonDef.evolvesToId;

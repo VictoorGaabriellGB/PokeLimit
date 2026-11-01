@@ -293,64 +293,60 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     name: 'Mapa 1 - Vila Verdejante',
     file: 'assets/maps/map1.jpeg',
     theme: 'forest',
-    worldScale: 1.45,
-    northExitNormX: 0.505,
-    southEntranceNormX: 0.475,
-    initialSpawnNorm: { x: 0.49, y: 0.535 },
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.52 },
   },
   {
     key: 'map2',
     name: 'Mapa 2 - Vale das Falésias',
     file: 'assets/maps/map2.jpeg',
     theme: 'forest',
-    worldScale: 1.45,
-    northExitNormX: 0.575,
-    southEntranceNormX: 0.475,
-    initialSpawnNorm: { x: 0.475, y: 0.88 },
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
     key: 'map3',
     name: 'Mapa 3 - Rota da Clareira',
     file: 'assets/maps/map3.jpeg',
     theme: 'forest',
-    worldScale: 2.6,
-    northExitNormX: 0.495,
-    southEntranceNormX: 0.45,
-    initialSpawnNorm: { x: 0.50, y: 0.655 },
-    // Recorta a guarita e fileira de árvores inferior para o jogador entrar DEPOIS da área em anexo
-    southCropNormY: 0.685,
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
     key: 'map4',
     name: 'Mapa 4 - Cidade Pokémon',
     file: 'assets/maps/map4.jpeg',
     theme: 'forest',
-    worldScale: 1.45,
-    northExitNormX: 0.45,
-    southEntranceNormX: 0.485,
-    initialSpawnNorm: { x: 0.485, y: 0.715 },
-    // Recorta a guarita sul para o jogador entrar EXATAMENTE onde está o Raichu na foto em anexo
-    southCropNormY: 0.735,
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
     key: 'map6',
     name: 'Mapa 6 - Caverna Rochosa (1F)',
     file: 'assets/maps/map6.jpeg',
     theme: 'cave',
-    worldScale: 1.25,
+    worldScale: 1.5,
     northExitNormX: 0.5,
-    southEntranceNormX: 0.495,
-    initialSpawnNorm: { x: 0.495, y: 0.88 },
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
     key: 'map7',
     name: 'Mapa 7 - Profundezas da Caverna (2F)',
     file: 'assets/maps/map7.jpeg',
     theme: 'cave',
-    worldScale: 1.25,
-    northExitNormX: 0.495,
-    southEntranceNormX: 0.495,
-    initialSpawnNorm: { x: 0.495, y: 0.88 },
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
 ];
 
@@ -359,10 +355,10 @@ export const BOSS_MAP_DEFINITION: MapDefinition = {
   name: 'Arena Final - Ginásio de Pedra (BOSS ONIX)',
   file: 'assets/maps/map5-BOSS.jpeg',
   theme: 'boss',
-  worldScale: 1.35,
+  worldScale: 1.5,
   northExitNormX: 0.5,
   southEntranceNormX: 0.5,
-  initialSpawnNorm: { x: 0.5, y: 0.74 },
+  initialSpawnNorm: { x: 0.5, y: 0.72 },
 };
 
 export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
@@ -1141,6 +1137,37 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       },
     },
   },
+  '0074': {
+    id: '0074',
+    name: 'Geodude',
+    role: 'boss',
+    baseHp: 1250,
+    speed: 125,
+    scale: 1.5,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0074/Walk-Anim.png',
+        frameWidth: 56,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [10, 12, 10, 12],
+      },
+      Idle: {
+        file: 'assets/sprites/0074/Idle-Anim.png',
+        frameWidth: 56,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [14, 16, 14, 16],
+      },
+      Attack: {
+        file: 'assets/sprites/0074/Attack-Anim.png',
+        frameWidth: 56,
+        frameHeight: 56,
+        frameCount: 6,
+        durations: [8, 8, 12, 10, 8, 8],
+      },
+    },
+  },
   '0095': {
     id: '0095',
     name: 'Onix',
@@ -1176,4 +1203,22 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
 
 export const STARTER_IDS = ['0025', '0004', '0001', '0007', '0039'] as const;
 export const ENEMY_IDS = ['0019', '0041'] as const;
+export const BOSS_GEODUDE_ID = '0074';
+export const BOSS_ONIX_ID = '0095';
 export const BOSS_ID = '0095';
+
+export interface MinibossConfig {
+  id: string;
+  name: string;
+  title: string;
+  element: ElementType | 'veneno' | 'normal' | string;
+}
+
+export const MAP_MINIBOSS_CONFIGS: Record<string, MinibossConfig> = {
+  map1: { id: '0002', name: 'Ivysaur Alfa', title: '🌱 Guardião da Floresta', element: 'planta' },
+  map2: { id: '0005', name: 'Charmeleon Alfa', title: '🔥 Fera das Falésias', element: 'fogo' },
+  map3: { id: '0008', name: 'Wartortle Guardião', title: '💧 Sentinela dos Rios', element: 'agua' },
+  map4: { id: '0026', name: 'Raichu Elétrico', title: '⚡ Tirano das Ruas', element: 'eletrico' },
+  map6: { id: '0041', name: 'Golbat das Sombras', title: '🦇 Terror das Cavernas', element: 'veneno' },
+  map7: { id: '0040', name: 'Wigglytuff Titã', title: '✨ Titã Hipnótico', element: 'fada' },
+};

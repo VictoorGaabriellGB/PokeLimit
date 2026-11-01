@@ -5,6 +5,7 @@ import {
   MapDefinition,
 } from '../config/pokemonManifest';
 import { DEPTH } from './depth';
+import { MAP_LAYOUTS, NormalizedBox } from '../config/mapLayouts';
 
 export type MapCellType = 'walkable' | 'water' | 'building' | 'boundary';
 
@@ -21,78 +22,7 @@ const SEAM_BRIDGE_HEIGHT = 380;
 */
 const ENTRY_DISTANCE_PAST_SEAM = 340;
 
-interface NormalizedBox {
-  x0: number;
-  x1: number;
-  y0: number;
-  y1: number;
-}
-
-/**
- * Caixas de colisão explícitas (em coordenadas normalizadas da imagem original 0..1)
- * para todas as casas, ginásios, laboratórios, cercas e guaritas de cada mapa,
- * garantindo que telhados e paredes brancas/cinzas bloqueiem 100% sem afetar as estradas!
- */
-const MAP_SOLID_BOXES: Record<string, NormalizedBox[]> = {
-  map1: [
-    // Casa superior esquerda (Red's House + placa)
-    { x0: 0.365, x1: 0.472, y0: 0.478, y1: 0.533 },
-    // Casa superior direita (Blue's House + placa)
-    { x0: 0.518, x1: 0.622, y0: 0.478, y1: 0.533 },
-    // Laboratório do Prof. Carvalho
-    { x0: 0.514, x1: 0.635, y0: 0.539, y1: 0.594 },
-    // Cerca de madeira esquerda + canteiro
-    { x0: 0.378, x1: 0.472, y0: 0.556, y1: 0.573 },
-    // Cerca de madeira inferior (acima do lago)
-    { x0: 0.514, x1: 0.622, y0: 0.606, y1: 0.624 },
-  ],
-  map2: [
-    // Guarita norte esquerda
-    { x0: 0.362, x1: 0.438, y0: 0.054, y1: 0.098 },
-    // Casa de telhado azul norte
-    { x0: 0.482, x1: 0.548, y0: 0.128, y1: 0.166 },
-    // Guarita central esquerda
-    { x0: 0.344, x1: 0.438, y0: 0.345, y1: 0.402 },
-    // Guarita central direita
-    { x0: 0.510, x1: 0.578, y0: 0.345, y1: 0.395 },
-    // Ginásio / Prédio laranja maior na cidade
-    { x0: 0.558, x1: 0.654, y0: 0.630, y1: 0.684 },
-    // Casa verde superior esquerda na cidade
-    { x0: 0.450, x1: 0.520, y0: 0.652, y1: 0.692 },
-    // Casa verde central esquerda na cidade
-    { x0: 0.450, x1: 0.520, y0: 0.708, y1: 0.748 },
-    // PokéMart (telhado azul)
-    { x0: 0.570, x1: 0.636, y0: 0.708, y1: 0.748 },
-    // Pokémon Center (telhado vermelho)
-    { x0: 0.450, x1: 0.520, y0: 0.764, y1: 0.808 },
-  ],
-  map3: [
-    // Guarita superior esquerda
-    { x0: 0.088, x1: 0.238, y0: 0.025, y1: 0.125 },
-    // Guarita inferior central (caso visível)
-    { x0: 0.425, x1: 0.572, y0: 0.730, y1: 0.840 },
-  ],
-  map4: [
-    // Grande Prédio / Ginásio norte + cercas frontais
-    { x0: 0.290, x1: 0.606, y0: 0.026, y1: 0.126 },
-    { x0: 0.266, x1: 0.422, y0: 0.132, y1: 0.150 },
-    { x0: 0.476, x1: 0.632, y0: 0.132, y1: 0.150 },
-    // Casa cinza superior direita
-    { x0: 0.626, x1: 0.728, y0: 0.254, y1: 0.304 },
-    // PokéMart (telhado azul)
-    { x0: 0.558, x1: 0.634, y0: 0.338, y1: 0.390 },
-    // Pokémon Center (telhado vermelho)
-    { x0: 0.368, x1: 0.454, y0: 0.420, y1: 0.474 },
-    // Casa cinza inferior esquerda
-    { x0: 0.274, x1: 0.352, y0: 0.470, y1: 0.522 },
-    // Cerca do jardim florido à direita
-    { x0: 0.554, x1: 0.734, y0: 0.454, y1: 0.528 },
-    // Monte / Entrada da caverna cercada
-    { x0: 0.548, x1: 0.682, y0: 0.678, y1: 0.756 },
-    // Entrada de caverna na encosta esquerda
-    { x0: 0.028, x1: 0.105, y0: 0.562, y1: 0.606 },
-  ],
-};
+// MAP_LAYOUTS importado de '../config/mapLayouts' com caixas e zonas modulares precisas
 
 interface ActiveMapInstance {
   def: MapDefinition;
@@ -190,6 +120,10 @@ export class MapManager {
     const nxt = checkMap(this.pendingNextMap);
     if (nxt !== null) return nxt;
     return 'boundary';
+  }
+
+  public update(_delta: number): void {
+    // MapManager frame update
   }
 
   public isWaterAt(worldX: number, worldY: number): boolean {
@@ -295,6 +229,19 @@ export class MapManager {
       bossMap.y + bossMap.height * 0.46
     );
 
+    return { playerSpawn, bossSpawn };
+  }
+
+  getBossArenaSpawns(): { playerSpawn: { x: number; y: number }; bossSpawn: { x: number; y: number } } {
+    const bossMap = this.currentMap;
+    const playerSpawn = this.findNearestWalkablePosition(
+      bossMap.x + bossMap.width * 0.5,
+      bossMap.y + bossMap.height * 0.71
+    );
+    const bossSpawn = this.findNearestWalkablePosition(
+      bossMap.x + bossMap.width * 0.5,
+      bossMap.y + bossMap.height * 0.46
+    );
     return { playerSpawn, bossSpawn };
   }
 
@@ -994,31 +941,38 @@ z.setData('obstacleType', 'boundary');
     data: Uint8ClampedArray,
     rawW: number,
     rawH: number,
-    fullRawH: number,
+    _fullRawH: number,
     def: MapDefinition,
     cols: number,
     rows: number,
     openSouthEntrance: boolean,
     openNorthExit: boolean
   ): { blockedGrid: boolean[][]; cellTypeGrid: MapCellType[][] } {
+    const layout = MAP_LAYOUTS[def.key];
+    const solidBoxes = layout?.solidBoxes ?? [];
+    const waterZones = layout?.waterZones ?? [];
+    const bridgeZones = layout?.bridgeZones ?? [];
+
+    const isInsideBox = (normX: number, normY: number, box: NormalizedBox) =>
+      normX >= box.x0 && normX <= box.x1 && normY >= box.y0 && normY <= box.y1;
+
     if (def.theme === 'boss') {
       const cellTypeGrid: MapCellType[][] = Array.from({ length: rows }, (_, r) =>
         Array.from({ length: cols }, (__, c) => {
           const normX = ((c + 0.5) * RAW_CELL_SIZE) / rawW;
           const normY = ((r + 0.5) * RAW_CELL_SIZE) / rawH;
-          const insideArena =
-            normX >= 0.145 &&
-            normX <= 0.855 &&
-            normY >= 0.345 &&
-            normY <= 0.785;
+          for (const box of solidBoxes) {
+            if (isInsideBox(normX, normY, box)) return 'building';
+          }
+          const dx = normX - 0.5;
+          const dy = (normY - 0.5) * 1.5;
+          const insideArena = dx * dx + dy * dy <= 0.38 * 0.38;
           return insideArena ? 'walkable' : 'boundary';
         })
       );
       const blockedGrid = cellTypeGrid.map((row) => row.map((cell) => cell !== 'walkable'));
       return { blockedGrid, cellTypeGrid };
     }
-
-    const solidBoxes = MAP_SOLID_BOXES[def.key] ?? [];
 
     const cellTypeGrid: MapCellType[][] = Array.from({ length: rows }, (_, r) =>
       Array.from({ length: cols }, (__, c) => {
@@ -1027,17 +981,32 @@ z.setData('obstacleType', 'boundary');
         if (r >= rows - 1 && !openSouthEntrance) return 'boundary';
 
         const normX = ((c + 0.5) * RAW_CELL_SIZE) / rawW;
-        const normYFull = ((r + 0.5) * RAW_CELL_SIZE) / fullRawH;
+        const normY = ((r + 0.5) * RAW_CELL_SIZE) / rawH;
 
+        // 1. Pontes e travessias de madeira/pedra são sempre caminháveis (para pokémons terrestres)
+        for (const bridge of bridgeZones) {
+          if (isInsideBox(normX, normY, bridge)) {
+            return 'walkable';
+          }
+        }
+
+        // 2. Construções e estruturas sólidas (bloqueiam chão/água, voadores passam)
         for (const box of solidBoxes) {
-          if (
-            normX >= box.x0 &&
-            normX <= box.x1 &&
-            normYFull >= box.y0 &&
-            normYFull <= box.y1
-          ) {
+          if (isInsideBox(normX, normY, box)) {
             return 'building';
           }
+        }
+
+        // 3. Lagos e rios (água: pokémons de água nadam, voadores voam, outros bloqueiam)
+        for (const water of waterZones) {
+          if (isInsideBox(normX, normY, water)) {
+            return 'water';
+          }
+        }
+
+        // 4. Perímetro denso de copas de árvores / falésias (3 tiles de margem ao redor)
+        if (c <= 2 || c >= cols - 3 || r <= 2 || r >= rows - 3) {
+          return 'boundary';
         }
 
         return this.classifyRawCell(
