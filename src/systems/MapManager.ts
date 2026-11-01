@@ -1004,8 +1004,8 @@ z.setData('obstacleType', 'boundary');
           }
         }
 
-        // 4. Perímetro denso de copas de árvores / falésias (3 tiles de margem ao redor)
-        if (c <= 2 || c >= cols - 3 || r <= 2 || r >= rows - 3) {
+        // 4. Perímetro extremo do mapa (2 tiles de margem externa)
+        if (c <= 1 || c >= cols - 2 || r <= 1 || r >= rows - 2) {
           return 'boundary';
         }
 
@@ -1043,12 +1043,16 @@ z.setData('obstacleType', 'boundary');
   }
 
   /**
-   * Detecção precisa de obstáculos por amostragem de pixels:
-   * Árvores densas, construções (telhados/paredes), cercas, falésias e rios bloqueiam,
-   * enquanto grama baixa, grama alta (matinhos escuros), caminhos de areia e calçadas
-   * são 100% livres para caminhar e NUNCA bloqueiam o jogador ou inimigos.
+   * Detecção pr  /**
+   * Detecção precisa e revisada de células do mapa:
+   * - Gramas de todos os tons, flores de qualquer cor, caminhos (terra, areia, cascalho, calçadas)
+   *   e escadas (madeira, pedra de falésia) são 100% LIVRES para caminhar (SEM blockguard)!
+   * - Árvores grandes (apenas copas/troncos densos) e construções possuem bodyblock para pokémons terrestres,
+   *   mas pokémons voadores voam livremente por cima.
+   * - Rios e lagos: pokémons do tipo água nadam (com animação), voadores voam, outros bloqueiam.
+   * - Penhascos verticais e bordas extremas: boundary (bloqueia todos).
    */
-    private classifyRawCell(
+  private classifyRawCell(
     data: Uint8ClampedArray,
     imgW: number,
     imgH: number,
@@ -1059,7 +1063,6 @@ z.setData('obstacleType', 'boundary');
     let water = 0;
     let tree = 0;
     let building = 0;
-    let fence = 0;
     let rock = 0;
     let walkable = 0;
     let total = 0;
@@ -1076,126 +1079,130 @@ z.setData('obstacleType', 'boundary');
         total++;
 
         // 1. Rios, lagos e corpos d'água (azul claramente predominante)
-        if (b > r + 30 && b > g + 10 && b >= 115 && r < 130) {
+        if (b > r + 35 && b > g + 15 && b >= 125) {
           water++;
           continue;
         }
 
         // 2. Tema de Caverna (map6, map7)
         if (theme === 'cave') {
-          const isSand =
-            r > 175 && g > 160 && b > 90 && Math.abs(r - g) < 32;
           const isCaveFloor =
-            r >= 110 &&
-            r <= 190 &&
-            g >= 118 &&
-            g <= 198 &&
-            b >= 88 &&
-            b <= 168 &&
-            g >= r - 16;
-          const isMoss = g > r + 12 && g > b + 8;
-          if (isSand || isCaveFloor || isMoss) {
+            (r >= 95 && g >= 90 && b >= 65 && Math.abs(r - g) <= 40) ||
+            (r >= 155 && g >= 140 && b >= 75) ||
+            (g > r + 8 && g > b + 6);
+          const isCaveStair =
+            r >= 105 && r <= 195 && g >= 95 && g <= 180 && b <= 145;
+
+          if (isCaveFloor || isCaveStair) {
             walkable++;
             continue;
           }
-          if (
-            (r > g + 14 && r > b + 16 && r > 95) ||
-            (r < 110 && g < 92 && b < 92)
-          ) {
+          if (r < 100 && g < 85 && b < 85) {
             rock++;
+            continue;
           }
-          continue;
         }
 
-        // 3. Terrenos caminho / grama (100% livres)
-        const isGrass =
-          g >= 68 &&
-          g >= r + 10 &&
-          g >= b - 12 &&
-          r <= 160 &&
-          b <= 175;
-
-        const isDirtRoad =
-          r >= 170 &&
-          g >= 145 &&
-          b >= 80 &&
-          b <= 190 &&
-          r >= g - 12 &&
-          r - g <= 46 &&
-          g > b + 18;
-
-        const isWhiteRoad =
-          r >= 165 &&
-          g >= 165 &&
-          b >= 165 &&
-          Math.abs(r - g) <= 28 &&
-          Math.abs(g - b) <= 30;
-
+        // 3. FLORES DE TODAS AS CORES (vermelhas, amarelas, azuis, rosas, brancas)
+        // Devem ser 100% livres para caminhar (SEM blockguard)
         const isFlower =
-          r > 180 && g >= 55 && g <= 165 && b >= 35 && b <= 135;
+          (r > 155 && r > g + 18) || // Vermelha / magenta / rosa
+          (r > 165 && g > 140 && b < 130) || // Amarela / alaranjada
+          (b > 155 && b > r + 25) || // Azul / ciano / lilás
+          (r > 195 && g > 195 && b > 185); // Branca / creme claro
 
-        if (isGrass || isDirtRoad || isWhiteRoad || isFlower) {
+        if (isFlower) {
           walkable++;
           continue;
         }
 
-        // 4. Copas de árvores reais
-        const isTreeCrownDome =
-          g >= 142 && r >= 95 && b <= 78 && g - b >= 62 && r > b + 18;
-        const isTreeTrunk =
-          r >= 78 &&
-          r <= 155 &&
-          g >= 40 &&
-          g <= 98 &&
-          b >= 20 &&
-          b <= 68 &&
-          r > g + 18;
-        const isTreeShadowPitch = r < 45 && g < 60 && b < 42;
+        // 4. GRAMAS DE TODOS OS TONS (grama baixa, média, grama alta e matinhos)
+        // Devem ser 100% livres para caminhar (SEM blockguard)
+        const isGrass =
+          (g >= 135 && (r >= 45 || b >= 85)) ||
+          (g >= 110 && g >= r + 15 && g >= b - 10 && (r >= 45 || b >= 75)) ||
+          (g >= 140 && g >= r - 10 && g >= b - 10);
 
-        if (isTreeCrownDome || isTreeTrunk || isTreeShadowPitch) {
+        if (isGrass) {
+          walkable++;
+          continue;
+        }
+
+        // 5. CAMINHOS E ESTRADAS (terra batida, areia, cascalho, calçadas de pedra)
+        // Devem ser 100% livres para caminhar (SEM blockguard)
+        const isDirtRoad =
+          r >= 135 &&
+          g >= 115 &&
+          b >= 60 &&
+          r >= g - 20 &&
+          r - g <= 55 &&
+          g > b + 10;
+
+        const isCityRoad =
+          r >= 140 &&
+          g >= 140 &&
+          b >= 140 &&
+          Math.abs(r - g) <= 35 &&
+          Math.abs(g - b) <= 35;
+
+        if (isDirtRoad || isCityRoad) {
+          walkable++;
+          continue;
+        }
+
+        // 6. ESCADAS E DEGRAUS (madeira, pedra esculpida em falésias)
+        // Devem ser 100% livres para caminhar (SEM blockguard)
+        const isWoodStair =
+          r >= 125 &&
+          r <= 220 &&
+          g >= 80 &&
+          g <= 180 &&
+          b >= 35 &&
+          b <= 135 &&
+          r > g + 12;
+
+        const isStoneStair =
+          r >= 85 &&
+          r <= 180 &&
+          g >= 80 &&
+          g <= 175 &&
+          b >= 70 &&
+          b <= 170 &&
+          Math.abs(r - g) <= 22 &&
+          Math.abs(g - b) <= 25;
+
+        if (isWoodStair || isStoneStair) {
+          walkable++;
+          continue;
+        }
+
+        // 7. ÁRVORES GRANDES (apenas o miolo/tronco de árvores grandes maciças)
+        // Bloqueiam pokémons terrestres, mas pokémons voadores passam por cima!
+        const isTreeCanopy =
+          r <= 42 && g <= 145 && b <= 80 && g >= r + 25 && g >= b + 10;
+        const isTreeTrunk =
+          r >= 60 && r <= 145 && g >= 25 && g <= 85 && b <= 55 && r > g + 25;
+        const isTreeShadow = r <= 38 && g <= 50 && b <= 38;
+
+        if (isTreeCanopy || isTreeTrunk || isTreeShadow) {
           tree++;
           continue;
         }
 
-        // 5. Cercas e placas de madeira
-        if (
-          r >= 115 &&
-          r <= 195 &&
-          g >= 65 &&
-          g <= 138 &&
-          b >= 40 &&
-          b <= 108 &&
-          r > g + 24 &&
-          g >= b
-        ) {
-          fence++;
+        // 8. Telhados de casas e construções (voadores passam por cima, terrestres bloqueiam)
+        const isRedRoof = r > 165 && g < 95 && b < 95;
+        const isBlueRoof = b > 160 && r < 100 && g < 150;
+        if (isRedRoof || isBlueRoof) {
+          building++;
           continue;
         }
 
-        // 6. Falésias marrons e pedras cinzas
-        const isBrownCliff =
-          r > g + 18 && g > b + 10 && r >= 95 && r <= 215 && b < 125;
-        const isGreyRock =
-          r >= 85 &&
-          r <= 155 &&
-          g >= 85 &&
-          g <= 155 &&
-          b >= 85 &&
-          b <= 160 &&
-          Math.abs(r - g) <= 12 &&
-          Math.abs(g - b) <= 12;
-        if (isBrownCliff || isGreyRock) {
+        // 9. Paredes rochosas verticais e penhascos intransponíveis
+        const isCliff =
+          r > g + 22 && g > b + 12 && r >= 95 && r <= 220 && b < 105;
+        if (isCliff) {
           rock++;
           continue;
-        }
-
-        // 7. Telhados e paredes de prédios
-        const isRoof =
-          (r > 165 && g < 100 && b < 100) ||
-          (b > 145 && r < 118 && g < 172) ||
-          (r > 160 && g > 118 && g < 175 && b < 95);
-        if (isRoof) {
-          building++;
         }
       }
     }
@@ -1204,34 +1211,36 @@ z.setData('obstacleType', 'boundary');
 
     const walkableRatio = walkable / total;
     const waterRatio = water / total;
-    const fenceRatio = fence / total;
-    const rockRatio = rock / total;
     const treeRatio = tree / total;
     const buildingRatio = building / total;
+    const rockRatio = rock / total;
 
-    if (theme === 'cave') {
-      if (waterRatio >= 0.25) return 'water';
-      if (rockRatio >= 0.38) return 'boundary';
+    // 1. Regra prioritária de fluidez: Se há pelo menos 20% de área caminhável
+    // (grama, flor, caminho ou escada), a célula é 100% LIVRE (walkable) e NUNCA gera blockguard!
+    if (walkableRatio >= 0.20) {
       return 'walkable';
     }
 
-    if (waterRatio >= 0.26) return 'water';
-    if (fenceRatio >= 0.28 || buildingRatio >= 0.35) return 'building';
-    if (rockRatio >= 0.36 || treeRatio >= 0.45) return 'boundary';
-
-    if (walkableRatio >= 0.30) {
-      return 'walkable';
+    // 2. Corpos d'água (pokémons de água nadam, voadores voam, outros bloqueiam)
+    if (waterRatio >= 0.35) {
+      return 'water';
     }
 
-    if (waterRatio >= 0.15) return 'water';
-    if (buildingRatio >= 0.20 || fenceRatio >= 0.20) return 'building';
-    if (treeRatio >= 0.25 || rockRatio >= 0.25) return 'boundary';
+    // 3. Árvores grandes e construções sólidas (voadores voam por cima, terrestres têm bodyblock)
+    if (treeRatio >= 0.45 || buildingRatio >= 0.35) {
+      return 'building';
+    }
 
+    // 4. Falésias verticais intransponíveis e paredes de caverna (boundary: bloqueia todos)
+    if (rockRatio >= 0.45) {
+      return 'boundary';
+    }
+
+    // 5. Padrão seguro para áreas abertas
     return 'walkable';
   }
 
-
-    private buildStaticZonesForMap(m: ActiveMapInstance): void {
+  private buildStaticZonesForMap(m: ActiveMapInstance): void {
     for (let r = 0; r < m.rows; r++) {
       let c = 0;
       while (c < m.cols) {

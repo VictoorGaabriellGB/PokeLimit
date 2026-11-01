@@ -97,8 +97,17 @@ export class Enemy {
     return this.isBoss ? 38 : this.isMiniboss ? 26 : 20;
   }
 
-    canFly(): boolean {
-    return this.pokemonDef.canFly === true || this.pokemonDef.id === '0041';
+  canFly(): boolean {
+    return (
+      this.pokemonDef.canFly === true ||
+      this.pokemonDef.id === '0041' ||
+      this.pokemonDef.id === '0042' ||
+      this.pokemonDef.id === '0123'
+    );
+  }
+
+  canSwim(): boolean {
+    return this.pokemonDef.id === '0062';
   }
 
   isSleeping(): boolean {
@@ -534,30 +543,30 @@ export class Enemy {
     let projBorder = 0xfef08a;
     const id = this.pokemonDef.id;
 
-    if (id === '0002') {
-      // Ivysaur: folhas venenosas
-      projColor = 0x4ade80;
-      projBorder = 0x15803d;
-    } else if (id === '0005') {
-      // Charmeleon: chamas
+    if (id === '0123') {
+      // Scyther: Lâminas de Ar Cortante
+      projColor = 0x22c55e;
+      projBorder = 0x86efac;
+    } else if (id === '0126') {
+      // Magmar: Lança-Chamas Vulcânico
       projColor = 0xf97316;
-      projBorder = 0xdc2626;
-    } else if (id === '0008') {
-      // Wartortle: jatos d'água
-      projColor = 0x38bdf8;
-      projBorder = 0x0284c7;
-    } else if (id === '0026') {
-      // Raichu: faíscas
+      projBorder = 0xef4444;
+    } else if (id === '0062') {
+      // Poliwrath: Hidro-Bomba de Pressão
+      projColor = 0x0284c7;
+      projBorder = 0x7dd3fc;
+    } else if (id === '0125') {
+      // Electabuzz: Descarga Elétrica
       projColor = 0xfacc15;
-      projBorder = 0x67e8f9;
-    } else if (id === '0041') {
-      // Golbat: ondas supersônicas
+      projBorder = 0xfef08a;
+    } else if (id === '0042') {
+      // Golbat: Presas Venenosas & Ecos Hipersônicos
       projColor = 0xa855f7;
-      projBorder = 0xe9d5ff;
-    } else if (id === '0040') {
-      // Wigglytuff: esferas melódicas
-      projColor = 0xf472b6;
-      projBorder = 0xfff1f2;
+      projBorder = 0xd8b4fe;
+    } else if (id === '0112') {
+      // Rhydon: Rocha Pesada & Estilhaços
+      projColor = 0x78716c;
+      projBorder = 0xd6d3d1;
     }
 
     // Alerta sutil no chão

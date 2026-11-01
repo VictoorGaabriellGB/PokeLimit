@@ -3,10 +3,16 @@ import { BootScene } from '../scenes/BootScene';
 import { GameScene } from '../scenes/GameScene';
 import { MenuScene } from '../scenes/MenuScene';
 
+/**
+ * Versão do Jogo: Atualizar este número sempre que solicitado pelo usuário.
+ */
+export const GAME_VERSION = 'v1.1.0';
+
 export const GAME_SETTINGS = {
   WIDTH: 1280,
   HEIGHT: 720,
   BG_COLOR: '#162018',
+  VERSION: GAME_VERSION,
   /** Tempo em segundos até a passagem para o próximo mapa se abrir */
   MAP_DURATION_SECONDS: 40,
 } as const;
