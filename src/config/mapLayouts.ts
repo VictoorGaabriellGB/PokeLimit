@@ -8,9 +8,12 @@ export interface NormalizedBox {
 }
 
 export interface MapLayoutDefinition {
+  deterministic?: boolean;
   solidBoxes?: NormalizedBox[];
   waterZones?: NormalizedBox[];
   bridgeZones?: NormalizedBox[];
+  boundaryBoxes?: NormalizedBox[];
+  walkableZones?: NormalizedBox[];
 }
 
 export const MAP_LAYOUTS: Record<string, MapLayoutDefinition> = mapLayoutsJson as Record<string, MapLayoutDefinition>;

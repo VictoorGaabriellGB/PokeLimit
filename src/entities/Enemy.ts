@@ -107,7 +107,11 @@ export class Enemy {
   }
 
   canSwim(): boolean {
-    return this.pokemonDef.id === '0062';
+    return (
+      this.pokemonDef.canSwim === true ||
+      this.pokemonDef.id === '0062' ||
+      this.pokemonDef.id === '0131'
+    );
   }
 
   isSleeping(): boolean {
@@ -567,6 +571,10 @@ export class Enemy {
       // Rhydon: Rocha Pesada & Estilhaços
       projColor = 0x78716c;
       projBorder = 0xd6d3d1;
+    } else if (id === '0131') {
+      // Lapras: Rajada Oceânica Glacial
+      projColor = 0x06b6d4;
+      projBorder = 0xa5f3fc;
     }
 
     // Alerta sutil no chão

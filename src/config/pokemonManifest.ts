@@ -329,6 +329,16 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
+    key: 'map5',
+    name: 'Mapa 5 - Costa das Marés',
+    file: 'assets/maps/map5.jpeg',
+    theme: 'forest',
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
+  },
+  {
     key: 'map6',
     name: 'Mapa 6 - Caverna Rochosa (1F)',
     file: 'assets/maps/map6.jpeg',
@@ -1392,6 +1402,39 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       },
     },
   },
+  '0131': {
+    id: '0131',
+    name: 'Lapras',
+    role: 'enemy',
+    baseHp: 510,
+    speed: 120,
+    scale: 1.48,
+    canFly: false,
+    canSwim: true,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0131/Walk-Anim.png',
+        frameWidth: 48,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [10, 12, 10, 12],
+      },
+      Idle: {
+        file: 'assets/sprites/0131/Idle-Anim.png',
+        frameWidth: 48,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [40, 12, 16, 12],
+      },
+      Attack: {
+        file: 'assets/sprites/0131/Attack-Anim.png',
+        frameWidth: 88,
+        frameHeight: 88,
+        frameCount: 12,
+        durations: [2, 2, 6, 1, 1, 1, 2, 2, 2, 2, 2, 2],
+      },
+    },
+  },
 };
 
 export const STARTER_IDS = ['0025', '0004', '0001', '0007', '0039'] as const;
@@ -1412,6 +1455,7 @@ export const MAP_MINIBOSS_CONFIGS: Record<string, MinibossConfig> = {
   map2: { id: '0126', name: 'Magmar Vulcânico', title: '🔥 Fera das Falésias', element: 'fogo' },
   map3: { id: '0062', name: 'Poliwrath Campeão', title: '💧 Guardião dos Rios', element: 'agua' },
   map4: { id: '0125', name: 'Electabuzz Trovão', title: '⚡ Tirano das Ruas', element: 'eletrico' },
+  map5: { id: '0131', name: 'Lapras Guardião', title: '🌊 Soberano das Marés', element: 'agua' },
   map6: { id: '0042', name: 'Golbat Alfa', title: '🦇 Terror das Cavernas', element: 'veneno' },
   map7: { id: '0112', name: 'Rhydon Titânico', title: '🪨 Guardião das Profundezas', element: 'rocha' },
 };

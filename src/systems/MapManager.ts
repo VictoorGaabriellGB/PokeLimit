@@ -949,9 +949,12 @@ z.setData('obstacleType', 'boundary');
     openNorthExit: boolean
   ): { blockedGrid: boolean[][]; cellTypeGrid: MapCellType[][] } {
     const layout = MAP_LAYOUTS[def.key];
+    const isDeterministic = layout?.deterministic === true;
     const solidBoxes = layout?.solidBoxes ?? [];
     const waterZones = layout?.waterZones ?? [];
     const bridgeZones = layout?.bridgeZones ?? [];
+    const boundaryBoxes = layout?.boundaryBoxes ?? [];
+    const walkableZones = layout?.walkableZones ?? [];
 
     const isInsideBox = (normX: number, normY: number, box: NormalizedBox) =>
       normX >= box.x0 && normX <= box.x1 && normY >= box.y0 && normY <= box.y1;
@@ -959,10 +962,22 @@ z.setData('obstacleType', 'boundary');
     if (def.theme === 'boss') {
       const cellTypeGrid: MapCellType[][] = Array.from({ length: rows }, (_, r) =>
         Array.from({ length: cols }, (__, c) => {
+          if (c <= 1 || c >= cols - 2 || r <= 1 || r >= rows - 2) {
+            return 'boundary';
+          }
           const normX = ((c + 0.5) * RAW_CELL_SIZE) / rawW;
           const normY = ((r + 0.5) * RAW_CELL_SIZE) / rawH;
           for (const box of solidBoxes) {
             if (isInsideBox(normX, normY, box)) return 'building';
+          }
+          for (const bnd of boundaryBoxes) {
+            if (isInsideBox(normX, normY, bnd)) return 'boundary';
+          }
+          if (walkableZones.length > 0) {
+            for (const walk of walkableZones) {
+              if (isInsideBox(normX, normY, walk)) return 'walkable';
+            }
+            return 'boundary';
           }
           const dx = normX - 0.5;
           const dy = (normY - 0.5) * 1.5;
@@ -983,30 +998,48 @@ z.setData('obstacleType', 'boundary');
         const normX = ((c + 0.5) * RAW_CELL_SIZE) / rawW;
         const normY = ((r + 0.5) * RAW_CELL_SIZE) / rawH;
 
-        // 1. Pontes e travessias de madeira/pedra são sempre caminháveis (para pokémons terrestres)
+        // 1. Pontes, píeres e escadas registradas são 100% livres para caminhar (SEM bodyblock)
         for (const bridge of bridgeZones) {
           if (isInsideBox(normX, normY, bridge)) {
             return 'walkable';
           }
         }
+        for (const walk of walkableZones) {
+          if (isInsideBox(normX, normY, walk)) {
+            return 'walkable';
+          }
+        }
 
-        // 2. Construções e estruturas sólidas (bloqueiam chão/água, voadores passam)
+        // 2. Construções, cercas, estátuas e árvores grandes (bloqueiam terrestres/aquáticos, voadores passam!)
         for (const box of solidBoxes) {
           if (isInsideBox(normX, normY, box)) {
             return 'building';
           }
         }
 
-        // 3. Lagos e rios (água: pokémons de água nadam, voadores voam, outros bloqueiam)
+        // 3. Paredes de caverna e falésias íngremes sem escada (bloqueiam todos)
+        for (const bnd of boundaryBoxes) {
+          if (isInsideBox(normX, normY, bnd)) {
+            return 'boundary';
+          }
+        }
+
+        // 4. Lagos, rios e mares (pokémons de água nadam, voadores voam, outros bloqueiam)
         for (const water of waterZones) {
           if (isInsideBox(normX, normY, water)) {
             return 'water';
           }
         }
 
-        // 4. Perímetro extremo do mapa (2 tiles de margem externa)
+        // 5. Perímetro extremo do mapa (2 tiles de margem externa)
         if (c <= 1 || c >= cols - 2 || r <= 1 || r >= rows - 2) {
           return 'boundary';
+        }
+
+        // 6. Se o layout é determinístico (gerado com coordenadas exatas 1:1), todo o restante
+        // (gramas, grama alta, flores, caminhos, praias, piso de caverna) é 100% caminhável!
+        if (isDeterministic) {
+          return 'walkable';
         }
 
         return this.classifyRawCell(

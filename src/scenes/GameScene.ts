@@ -10,6 +10,7 @@ import {
   BOSS_ONIX_ID,
   ENEMY_IDS,
   MAP_MINIBOSS_CONFIGS,
+  MAP_SEQUENCE,
   MAX_PLAYER_LEVEL,
 } from '../config/pokemonManifest';
 import { Enemy } from '../entities/Enemy';
@@ -402,7 +403,7 @@ export class GameScene extends Phaser.Scene {
       this.openAbilityChoiceModal();
     } else if (
       (this.player.level >= MAX_PLAYER_LEVEL ||
-        this.mapManager.mapsCleared >= 6) &&
+        this.mapManager.mapsCleared >= MAP_SEQUENCE.length) &&
       !this.bossEncounterStarted &&
       !this.isModalOpen
     ) {
