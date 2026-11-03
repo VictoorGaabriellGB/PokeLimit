@@ -86,6 +86,16 @@ interface SporeCloud {
   gfx: Phaser.GameObjects.Arc;
 }
 
+interface ElectricPuddle {
+  x: number;
+  y: number;
+  radius: number;
+  remainingMs: number;
+  tickCooldownMs: number;
+  damage: number;
+  gfx: Phaser.GameObjects.Arc;
+}
+
 export class Player {
   public readonly sprite: Phaser.Types.Physics.Arcade.SpriteWithDynamicBody;
   private shadow: Phaser.GameObjects.Ellipse;
@@ -154,10 +164,13 @@ export class Player {
   private orbitAngle = 0;
   private orbitHitCooldown = new Map<Enemy, number>();
 
-  // Efeitos de campo
+  // Efeitos de campo & mecânicas de ultimates
   private flamePatches: FlamePatch[] = [];
   private sporeClouds: SporeCloud[] = [];
+  private electricPuddles: ElectricPuddle[] = [];
   private flameTrailDropCooldownMs = 0;
+  private activeFlameUltTimerMs = 0;
+  private hydroBubbleTimerMs = 0;
 
   private keys!: {
     W: Phaser.Input.Keyboard.Key;
@@ -411,21 +424,21 @@ export class Player {
       if (isFire && this.scene.textures.exists('sheet-attack-fire')) {
         const spr = this.scene.add
           .sprite(this.sprite.x, this.sprite.y, 'sheet-attack-fire', 2)
-          .setScale(0.55)
+          .setScale(0.18)
           .setDepth(DEPTH.ORBITALS);
         spr.play('anim-attack-fire');
         this.orbitals.push(spr);
       } else if (!isFire && this.scene.textures.exists('sheet-attack-water')) {
         const spr = this.scene.add
           .sprite(this.sprite.x, this.sprite.y, 'sheet-attack-water', 1)
-          .setScale(0.55)
+          .setScale(0.18)
           .setDepth(DEPTH.ORBITALS);
         spr.play('anim-attack-water');
         this.orbitals.push(spr);
       } else {
         const orb = this.scene.add
-          .circle(this.sprite.x, this.sprite.y, 8, this.profile.elementColor, 1)
-          .setStrokeStyle(2, this.profile.secondaryColor, 1)
+          .circle(this.sprite.x, this.sprite.y, 5, this.profile.elementColor, 1)
+          .setStrokeStyle(1.5, this.profile.secondaryColor, 1)
           .setDepth(DEPTH.ORBITALS);
         this.orbitals.push(orb);
       }
@@ -569,6 +582,11 @@ export class Player {
         }
       }
       return;
+    }
+
+    // Redução de 50% de dano da Bolha Protetora do Squirtle (Ultimate)
+    if (this.hydroBubbleTimerMs > 0) {
+      rawAmount = Math.max(1, Math.round(rawAmount * 0.5));
     }
 
     const extraDr =
@@ -846,6 +864,13 @@ export class Player {
       if (this.attackAnimSafetyMs <= 0) this.finishAttackAnim();
     }
 
+    if (this.activeFlameUltTimerMs > 0) {
+      this.activeFlameUltTimerMs -= delta;
+    }
+    if (this.hydroBubbleTimerMs > 0) {
+      this.hydroBubbleTimerMs -= delta;
+    }
+
     this.addSpecialEnergy((SPECIAL_PASSIVE_GAIN_PER_SEC * delta) / 1000);
 
     // Regeneração Passiva (Classe + Cura da Chuva + Clorofila Solar)
@@ -923,7 +948,50 @@ export class Player {
     });
   }
 
-  // ===================== ENERGIA DO ESPECIAL =====================
+  // ===================== ENERGIA DO ESPECIAL & ABATES =====================
+
+  public onEnemyKilled(enemy: Enemy): void {
+    const energyGain = enemy.isBoss ? 50 : SPECIAL_MAX_ENERGY / 30;
+    this.addSpecialEnergy(energyGain);
+
+    // Explosão em área ao abater durante a Ultimate do Charmander (Lança-Chamas)
+    if (this.activeFlameUltTimerMs > 0) {
+      this.triggerFlameBurstExplosion(enemy.sprite.x, enemy.sprite.y);
+    }
+  }
+
+  private triggerFlameBurstExplosion(x: number, y: number): void {
+    const radius = 45;
+    const boom = this.scene.add
+      .circle(x, y, radius, 0xff7a1a, 0.6)
+      .setStrokeStyle(3, 0xffd24a, 1)
+      .setDepth(DEPTH.EFFECTS + 2)
+      .setScale(0.18);
+
+    this.scene.tweens.add({
+      targets: boom,
+      scale: 1,
+      alpha: 0,
+      duration: 320,
+      onComplete: () => boom.destroy(),
+    });
+
+    const dmg = this.profile.baseDamage * 1.6;
+    for (const e of this.enemiesProvider()) {
+      if (e.isDead) continue;
+      if (
+        Phaser.Math.Distance.Between(x, y, e.sprite.x, e.sprite.y) <= radius
+      ) {
+        this.dealDamage(e, dmg, {
+          special: true,
+          knockback: 190,
+          fromX: x,
+          fromY: y,
+          secondary: true,
+        });
+      }
+    }
+  }
 
   private addSpecialEnergy(amount: number): void {
     const classBonus = this.classDef.id === 'controlador' ? 1.3 : 1;
@@ -1172,23 +1240,23 @@ export class Player {
     const dmg = (42 + lvl * 18) * Math.max(1, speedRatio);
 
     this.spawnProjectile({
-      x: this.sprite.x + Math.cos(aim) * 18,
-      y: this.sprite.y + Math.sin(aim) * 18,
+      x: this.sprite.x + Math.cos(aim) * 16,
+      y: this.sprite.y + Math.sin(aim) * 16,
       angle: aim,
       speed: 430,
       range: 340,
-      hitRadius: 34,
+      hitRadius: 20,
       pierce: 0,
-      scale: 0.92,
+      scale: 0.28,
       sheetKey: 'sheet-attack-eletric',
       animKey: 'anim-attack-eletric',
       trailColor: 0xfacc15,
       drawFallback: () =>
         this.scene.add
-          .circle(0, 0, 13, 0xfacc15, 1)
-          .setStrokeStyle(3, 0xffffff, 1),
+          .circle(0, 0, 9, 0xfacc15, 1)
+          .setStrokeStyle(2, 0xffffff, 1),
       onHit: (_e, px, py) => {
-        this.spawnElectricImpact(px, py, 64);
+        this.spawnElectricImpact(px, py, 32);
         for (const target of this.enemiesProvider()) {
           if (target.isDead) continue;
           if (
@@ -1197,7 +1265,7 @@ export class Player {
               py,
               target.sprite.x,
               target.sprite.y
-            ) <= 68
+            ) <= 48
           ) {
             this.dealDamage(target, dmg, {
               knockback: 210,
@@ -1299,21 +1367,21 @@ export class Player {
   private fireFireBlast(aim: number, lvl: number): void {
     const dmg = 45 + lvl * 22;
     this.spawnProjectile({
-      x: this.sprite.x + Math.cos(aim) * 20,
-      y: this.sprite.y + Math.sin(aim) * 20,
+      x: this.sprite.x + Math.cos(aim) * 16,
+      y: this.sprite.y + Math.sin(aim) * 16,
       angle: aim,
       speed: 440,
       range: 270,
-      hitRadius: 30,
+      hitRadius: 20,
       pierce: 0,
-      scale: 0.85,
+      scale: 0.28,
       sheetKey: 'sheet-attack-fire',
       animKey: 'anim-attack-fire',
       trailColor: 0xfb923c,
       drawFallback: () =>
         this.scene.add
-          .circle(0, 0, 12, 0xff5722, 1)
-          .setStrokeStyle(3, 0xfef08a, 1),
+          .circle(0, 0, 9, 0xff5722, 1)
+          .setStrokeStyle(2, 0xfef08a, 1),
       onHit: (_e, px, py) => {
         this.detonateFireBlastStar(px, py, dmg);
       },
@@ -1324,10 +1392,10 @@ export class Player {
   }
 
   private detonateFireBlastStar(x: number, y: number, dmg: number): void {
-    const radius = 68;
+    const radius = 46;
     const blast = this.scene.add
-      .circle(x, y, 14, 0xff5722, 0.65)
-      .setStrokeStyle(3, 0xfef08a, 1)
+      .circle(x, y, 10, 0xff5722, 0.65)
+      .setStrokeStyle(2.5, 0xfef08a, 1)
       .setDepth(DEPTH.EFFECTS + 1);
     this.scene.tweens.add({
       targets: blast,
@@ -1343,13 +1411,13 @@ export class Player {
       if (this.scene.textures.exists('sheet-attack-fire')) {
         const tongue = this.scene.add
           .sprite(x, y, 'sheet-attack-fire', 3)
-          .setScale(0.55)
+          .setScale(0.20)
           .setRotation(a)
           .setDepth(DEPTH.EFFECTS + 2);
         this.scene.tweens.add({
           targets: tongue,
-          x: x + Math.cos(a) * 46,
-          y: y + Math.sin(a) * 46,
+          x: x + Math.cos(a) * 32,
+          y: y + Math.sin(a) * 32,
           alpha: 0,
           duration: 240,
           onComplete: () => tongue.destroy(),
@@ -1448,21 +1516,21 @@ export class Player {
   private fireHydroCannon(aim: number, lvl: number): void {
     const dmg = 46 + lvl * 22;
     this.spawnProjectile({
-      x: this.sprite.x + Math.cos(aim) * 22,
-      y: this.sprite.y + Math.sin(aim) * 22,
+      x: this.sprite.x + Math.cos(aim) * 18,
+      y: this.sprite.y + Math.sin(aim) * 18,
       angle: aim,
       speed: 460,
       range: 260 * this.rangeMult,
-      hitRadius: 34,
+      hitRadius: 22,
       pierce: 1 + lvl,
-      scale: 0.96,
+      scale: 0.32,
       sheetKey: 'sheet-attack-water',
       animKey: 'anim-attack-water',
       trailColor: 0x38bdf8,
       drawFallback: () =>
         this.scene.add
-          .circle(0, 0, 14, 0x0284c7, 1)
-          .setStrokeStyle(3, 0xe0f2fe, 1),
+          .circle(0, 0, 10, 0x0284c7, 1)
+          .setStrokeStyle(2, 0xe0f2fe, 1),
       onHit: (e, px, py) => {
         this.dealDamage(e, dmg, {
           knockback: 340,
@@ -1470,10 +1538,10 @@ export class Player {
           fromY: py,
           secondary: true,
         });
-        this.spawnWaterSplash(px, py, 0.85);
+        this.spawnWaterSplash(px, py, 0.30);
       },
       onEnd: (px, py) => {
-        this.spawnWaterSplash(px, py, 1.0);
+        this.spawnWaterSplash(px, py, 0.34);
       },
     });
   }
@@ -1482,21 +1550,21 @@ export class Player {
     const aim = this.computeAimAngle(320);
     for (const angle of this.spreadAngles(aim, lvl, 0.24)) {
       this.spawnProjectile({
-        x: this.sprite.x + Math.cos(angle) * 18,
-        y: this.sprite.y + Math.sin(angle) * 18,
+        x: this.sprite.x + Math.cos(angle) * 16,
+        y: this.sprite.y + Math.sin(angle) * 16,
         angle,
         speed: 410,
         range: 280 * this.rangeMult,
-        hitRadius: 28,
+        hitRadius: 16,
         pierce: 1,
-        scale: 0.78,
+        scale: 0.24,
         sheetKey: 'sheet-attack-fairy',
         animKey: 'anim-attack-fairy',
         trailColor: 0xf9a8d4,
         drawFallback: () =>
           this.scene.add
-            .circle(0, 0, 11, 0xf472b6, 1)
-            .setStrokeStyle(2.5, 0xfef08a, 1),
+            .circle(0, 0, 8, 0xf472b6, 1)
+            .setStrokeStyle(2, 0xfef08a, 1),
         onHit: (e, px, py) => {
           this.dealDamage(e, 38 + lvl * 16, {
             knockback: 185,
@@ -1505,12 +1573,12 @@ export class Player {
             secondary: true,
           });
           const pop = this.scene.add
-            .circle(px, py, 10, 0xfbcfe8, 0.65)
-            .setStrokeStyle(2, 0xfef08a, 1)
+            .circle(px, py, 6, 0xfbcfe8, 0.65)
+            .setStrokeStyle(1.5, 0xfef08a, 1)
             .setDepth(DEPTH.EFFECTS);
           this.scene.tweens.add({
             targets: pop,
-            radius: 42,
+            radius: 26,
             alpha: 0,
             duration: 200,
             onComplete: () => pop.destroy(),
@@ -1529,14 +1597,14 @@ export class Player {
     if (hasFireSheet) {
       const spr = this.scene.add
         .sprite(x, y, 'sheet-attack-fire', 2)
-        .setScale(0.5)
+        .setScale(0.20)
         .setRotation(-Math.PI / 2) // chama da brasa no chão sobe verticalmente (-Y)
         .setDepth(DEPTH.EFFECTS - 2);
       spr.play('anim-attack-fire');
       gfx = spr;
     } else {
       gfx = this.scene.add
-        .circle(x, y, 14, 0xff7b00, 0.45)
+        .circle(x, y, 9, 0xff7b00, 0.45)
         .setDepth(DEPTH.EFFECTS - 2);
     }
 
@@ -1670,6 +1738,108 @@ export class Player {
       }
       return true;
     });
+
+    this.electricPuddles = this.electricPuddles.filter((puddle) => {
+      puddle.remainingMs -= delta;
+      puddle.tickCooldownMs -= delta;
+      if (puddle.remainingMs <= 0) {
+        puddle.gfx.destroy();
+        return false;
+      }
+
+      if (puddle.tickCooldownMs <= 0) {
+        puddle.tickCooldownMs = 280;
+        for (const e of this.enemiesProvider()) {
+          if (e.isDead) continue;
+          if (
+            Phaser.Math.Distance.Between(
+              puddle.x,
+              puddle.y,
+              e.sprite.x,
+              e.sprite.y
+            ) <= puddle.radius
+          ) {
+            const killed = e.takeDamage(
+              Math.max(1, Math.round(puddle.damage)),
+              puddle.x,
+              puddle.y,
+              40,
+              false
+            );
+            if (killed) this.onKill(e);
+          }
+        }
+      }
+      return true;
+    });
+  }
+
+  private dropElectricPuddle(x: number, y: number, damage: number): void {
+    const radius = 24;
+    const gfx = this.scene.add
+      .circle(x, y, radius, 0xb89b00, 0.35)
+      .setStrokeStyle(2, 0xffe629, 0.85)
+      .setDepth(DEPTH.EFFECTS - 2);
+
+    this.scene.tweens.add({
+      targets: gfx,
+      alpha: { from: 0.75, to: 0.3 },
+      duration: 350,
+      yoyo: true,
+      repeat: 5,
+    });
+
+    this.electricPuddles.push({
+      x,
+      y,
+      radius,
+      remainingMs: 2200,
+      tickCooldownMs: 0,
+      damage,
+      gfx,
+    });
+  }
+
+  private dropSleepPowderCone(aim: number): void {
+    const range = 380 * this.rangeMult;
+    const halfAngle = 0.58;
+    const sx = this.sprite.x;
+    const sy = this.sprite.y;
+
+    for (let i = 0; i < 18; i++) {
+      const a = aim + Phaser.Math.FloatBetween(-halfAngle, halfAngle) * 0.92;
+      const dist = Phaser.Math.Between(50, range);
+      const color = Phaser.Utils.Array.GetRandom([
+        0xb59cff, 0x9ad66a, 0xd6c7ff,
+      ]);
+      const p = this.scene.add
+        .circle(sx, sy, Phaser.Math.Between(4, 8), color, 0.75)
+        .setDepth(DEPTH.EFFECTS + 1);
+      this.scene.tweens.add({
+        targets: p,
+        x: sx + Math.cos(a) * dist,
+        y: sy + Math.sin(a) * dist,
+        scale: 1.6,
+        alpha: 0,
+        duration: 550 + i * 20,
+        onComplete: () => p.destroy(),
+      });
+    }
+
+    for (const e of this.enemiesProvider()) {
+      if (e.isDead) continue;
+      const dx = e.sprite.x - sx;
+      const dy = e.sprite.y - sy;
+      const dist = Math.hypot(dx, dy);
+      if (dist > range) continue;
+      const angTo = Math.atan2(dy, dx);
+      if (
+        Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= halfAngle ||
+        dist < 30
+      ) {
+        e.dormir(e.isBoss ? 2000 : 4000);
+      }
+    }
   }
 
   // ===================== DISPARO E ANIMAÇÕES DE ATAQUE DIRECIONAIS =====================
@@ -1754,7 +1924,7 @@ export class Player {
     ) {
       const spr = this.scene.add.sprite(cfg.x, cfg.y, cfg.sheetKey, 0);
       spr.play(cfg.animKey);
-      spr.setScale(cfg.scale ?? 0.65);
+      spr.setScale(cfg.scale ?? 0.25);
       shape = spr;
     } else {
       shape = cfg.drawFallback();
@@ -1786,9 +1956,9 @@ export class Player {
         if (cfg.trailColor !== undefined) {
           const t = this.scene.add
             .circle(
-              shape.x - Math.cos(cfg.angle) * 10,
-              shape.y - Math.sin(cfg.angle) * 10,
-              3.5,
+              shape.x - Math.cos(cfg.angle) * 8,
+              shape.y - Math.sin(cfg.angle) * 8,
+              2.5,
               cfg.trailColor,
               0.55
             )
@@ -1840,21 +2010,21 @@ export class Player {
     return out;
   }
 
-  private spawnElectricImpact(x: number, y: number, maxRadius = 36): void {
+  private spawnElectricImpact(x: number, y: number, maxRadius = 20): void {
     if (
       this.scene.textures.exists('sheet-attack-eletric') &&
       this.scene.anims.exists('anim-attack-eletric-hit')
     ) {
       const fx = this.scene.add
         .sprite(x, y, 'sheet-attack-eletric', 2)
-        .setScale(0.55)
+        .setScale(0.24)
         .setRotation(Math.random() * Math.PI * 2)
         .setDepth(DEPTH.EFFECTS + 1);
       fx.play('anim-attack-eletric-hit');
       fx.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => fx.destroy());
     }
     const burst = this.scene.add
-      .circle(x, y, 10, 0xf7d02c, 0.55)
+      .circle(x, y, 6, 0xf7d02c, 0.55)
       .setDepth(DEPTH.EFFECTS);
     this.scene.tweens.add({
       targets: burst,
@@ -1865,7 +2035,7 @@ export class Player {
     });
   }
 
-  private spawnWaterSplash(x: number, y: number, scale = 0.72): void {
+  private spawnWaterSplash(x: number, y: number, scale = 0.28): void {
     if (
       this.scene.textures.exists('sheet-attack-water-hit') &&
       this.scene.anims.exists('anim-attack-water-hit')
@@ -1882,12 +2052,12 @@ export class Player {
     }
 
     const splash = this.scene.add
-      .circle(x, y, 14, 0x00b4d8, 0.6)
-      .setStrokeStyle(3, 0xffffff, 1)
+      .circle(x, y, 8, 0x00b4d8, 0.6)
+      .setStrokeStyle(2, 0xffffff, 1)
       .setDepth(DEPTH.EFFECTS);
     this.scene.tweens.add({
       targets: splash,
-      radius: 48 * scale,
+      radius: 40 * scale,
       alpha: 0,
       duration: 240,
       onComplete: () => splash.destroy(),
@@ -1902,28 +2072,28 @@ export class Player {
 
     for (const angle of this.spreadAngles(aim, count, 0.19)) {
       this.spawnProjectile({
-        x: this.sprite.x + Math.cos(angle) * 20,
-        y: this.sprite.y + Math.sin(angle) * 20,
+        x: this.sprite.x + Math.cos(angle) * 16,
+        y: this.sprite.y + Math.sin(angle) * 16,
         angle,
         speed: 495,
         range: p.range * this.rangeMult,
-        hitRadius: 28,
+        hitRadius: 16,
         pierce,
-        scale: 0.68,
+        scale: 0.24,
         sheetKey: 'sheet-attack-eletric',
         animKey: 'anim-attack-eletric',
         trailColor: 0xfef08a,
         drawFallback: () =>
           this.scene.add
-            .circle(0, 0, 9, p.elementColor, 1)
-            .setStrokeStyle(3, p.secondaryColor, 1),
+            .circle(0, 0, 7, p.elementColor, 1)
+            .setStrokeStyle(2, p.secondaryColor, 1),
         onHit: (e, px, py) => {
           this.dealDamage(e, p.baseDamage * 1.15 * dmgScale, {
             knockback: 180,
             fromX: px,
             fromY: py,
           });
-          this.spawnElectricImpact(px, py, 34);
+          this.spawnElectricImpact(px, py, 20);
         },
       });
     }
@@ -1953,7 +2123,7 @@ export class Player {
       if (hasAnim) {
         const flameSpr = this.scene.add
           .sprite(fx, fy, 'sheet-attack-fire', 1)
-          .setScale(0.68)
+          .setScale(0.26)
           .setRotation(a) // Ponta da chama aponta diretamente no ângulo 'a'!
           .setDepth(DEPTH.EFFECTS);
         flameSpr.play('anim-attack-fire-slash');
@@ -1961,21 +2131,21 @@ export class Player {
           targets: flameSpr,
           x: this.sprite.x + Math.cos(a) * range * 0.85,
           y: this.sprite.y + Math.sin(a) * range * 0.85,
-          scale: 0.92,
+          scale: 0.34,
           alpha: 0,
           duration: 280,
           onComplete: () => flameSpr.destroy(),
         });
       } else {
         const flame = this.scene.add
-          .circle(fx, fy, 15, p.elementColor, 0.75)
-          .setStrokeStyle(3, p.secondaryColor, 1)
+          .circle(fx, fy, 8, p.elementColor, 0.75)
+          .setStrokeStyle(2, p.secondaryColor, 1)
           .setDepth(DEPTH.EFFECTS);
         this.scene.tweens.add({
           targets: flame,
           x: this.sprite.x + Math.cos(a) * range * 0.8,
           y: this.sprite.y + Math.sin(a) * range * 0.8,
-          scale: 1.5,
+          scale: 1.3,
           alpha: 0,
           duration: 240,
           onComplete: () => flame.destroy(),
@@ -1998,7 +2168,7 @@ export class Player {
       );
       if (
         Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= halfArc + 0.24 ||
-        d < 26
+        d < 24
       ) {
         // A Queimadura ocorre pelos 5% base (+ Poder Solar) dentro de dealDamage!
         this.dealDamage(e, p.baseDamage * dmgScale, {
@@ -2015,12 +2185,12 @@ export class Player {
     const pierce = 1 + this.getAbilityLevel('pierce') * 2;
 
     const ring = this.scene.add
-      .circle(this.sprite.x, this.sprite.y, 14, p.secondaryColor, 0.25)
+      .circle(this.sprite.x, this.sprite.y, 10, p.secondaryColor, 0.25)
       .setStrokeStyle(2, p.elementColor, 0.85)
       .setDepth(DEPTH.EFFECTS - 2);
     this.scene.tweens.add({
       targets: ring,
-      radius: 52,
+      radius: 40,
       alpha: 0,
       duration: 260,
       onComplete: () => ring.destroy(),
@@ -2028,24 +2198,22 @@ export class Player {
 
     for (const angle of this.spreadAngles(aim, count, 0.17)) {
       this.spawnProjectile({
-        x: this.sprite.x + Math.cos(angle) * 18,
-        y: this.sprite.y + Math.sin(angle) * 18,
+        x: this.sprite.x + Math.cos(angle) * 16,
+        y: this.sprite.y + Math.sin(angle) * 16,
         angle,
         speed: 390,
         range: p.range * this.rangeMult,
-        hitRadius: 26,
+        hitRadius: 16,
         pierce,
-        scale: 0.64,
+        scale: 0.22,
         sheetKey: 'sheet-attack-grass',
         animKey: 'anim-attack-grass',
         trailColor: 0x86efac,
-        // Sem rotateSpeed caótico: cada folha voa apontando diretamente para o alvo!
         drawFallback: () =>
           this.scene.add
-            .ellipse(0, 0, 18, 8, p.elementColor, 1)
+            .ellipse(0, 0, 14, 6, p.elementColor, 1)
             .setStrokeStyle(2, p.secondaryColor, 1),
         onHit: (e, px, py) => {
-          // O Envenenamento ocorre pelos 5% base (+ Esporo de Efeito) dentro de dealDamage!
           this.dealDamage(e, p.baseDamage * dmgScale, {
             knockback: 130,
             fromX: px,
@@ -2067,31 +2235,31 @@ export class Player {
 
     for (const angle of this.spreadAngles(aim, waves, 0.28)) {
       this.spawnProjectile({
-        x: this.sprite.x + Math.cos(angle) * 22,
-        y: this.sprite.y + Math.sin(angle) * 22,
+        x: this.sprite.x + Math.cos(angle) * 18,
+        y: this.sprite.y + Math.sin(angle) * 18,
         angle,
         speed: 415,
         range: p.range * this.rangeMult,
-        hitRadius: 31,
+        hitRadius: 18,
         pierce: this.getAbilityLevel('pierce'),
-        scale: 0.72,
+        scale: 0.24,
         sheetKey: 'sheet-attack-water',
         animKey: 'anim-attack-water',
         trailColor: 0x90e0ef,
         drawFallback: () =>
           this.scene.add
-            .circle(0, 0, 14, p.elementColor, 0.75)
-            .setStrokeStyle(3, p.secondaryColor, 1),
+            .circle(0, 0, 10, p.elementColor, 0.75)
+            .setStrokeStyle(2.5, p.secondaryColor, 1),
         onHit: (e, px, py) => {
           this.dealDamage(e, p.baseDamage * dmgScale, {
             knockback: 310,
             fromX: px,
             fromY: py,
           });
-          this.spawnWaterSplash(px, py, 0.66);
+          this.spawnWaterSplash(px, py, 0.28);
         },
         onEnd: (ex, ey) => {
-          this.spawnWaterSplash(ex, ey, 0.75);
+          this.spawnWaterSplash(ex, ey, 0.32);
         },
       });
     }
@@ -2101,28 +2269,26 @@ export class Player {
   private basicSupportMelody(aim: number, dmgScale: number): void {
     const p = this.profile;
     const count = 1 + this.getAbilityLevel('multishot');
-    const radius = p.range * 0.72 * this.rangeMult;
 
     this.supportBuffTimerMs = 4000;
     this.heal(Math.max(1, Math.round(4 * this.healEfficiency)));
 
-    // 1. Dispara ondas crescentes harmônicas na direção do inimigo visado (+X)
     for (const angle of this.spreadAngles(aim, count, 0.25)) {
       this.spawnProjectile({
-        x: this.sprite.x + Math.cos(angle) * 18,
-        y: this.sprite.y + Math.sin(angle) * 18,
+        x: this.sprite.x + Math.cos(angle) * 16,
+        y: this.sprite.y + Math.sin(angle) * 16,
         angle,
         speed: 385,
         range: p.range * 1.15 * this.rangeMult,
-        hitRadius: 28,
+        hitRadius: 16,
         pierce: 1 + this.getAbilityLevel('pierce'),
-        scale: 0.72,
+        scale: 0.24,
         sheetKey: 'sheet-attack-fairy',
         animKey: 'anim-attack-fairy',
         trailColor: 0xfbcfe8,
         drawFallback: () =>
           this.scene.add
-            .circle(0, 0, 10, p.elementColor, 0.85)
+            .circle(0, 0, 8, p.elementColor, 0.85)
             .setStrokeStyle(2, p.secondaryColor, 1),
         onHit: (e, px, py) => {
           this.dealDamage(e, p.baseDamage * dmgScale, {
@@ -2220,8 +2386,8 @@ export class Player {
     this.currentState = 'Attack';
     this.playCurrentAnim(true);
 
-    this.scene.cameras.main.flash(150, 255, 255, 255, false);
-    this.scene.cameras.main.shake(180, 0.005);
+    const ultDef = this.getSpecialDefinition();
+    (this.scene as any).triggerCinematicSlowMo?.(ultDef.name);
 
     const mult = 1 + this.getAbilityLevel('energy') * 0.1;
     const base = this.profile.baseDamage * mult;
@@ -2240,7 +2406,7 @@ export class Player {
     }
   }
 
-  /** ULT Elétrico: Escudo Elétrico ('anim-especial-eletrico') + Trovões com Paralisia 100% */
+  /** ULT Elétrico: Escudo Elétrico ('anim-especial-eletrico') + Trovões com Poças Eletrizadas */
   private specialThunder(base: number): void {
     const px = this.sprite.x;
     const py = this.sprite.y;
@@ -2251,7 +2417,7 @@ export class Player {
     ) {
       const shield = this.scene.add
         .sprite(px, py, 'sheet-especial-eletrico', 0)
-        .setScale(0.92)
+        .setScale(0.40)
         .setDepth(DEPTH.EFFECTS + 2);
       shield.play('anim-especial-eletrico');
       shield.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () =>
@@ -2272,18 +2438,19 @@ export class Player {
 
     const strike = (x: number, y: number) => {
       const g = this.scene.add.graphics().setDepth(DEPTH.EFFECTS + 2);
-      g.lineStyle(4, 0xfef08a, 1);
+      g.lineStyle(3.5, 0xfef08a, 1);
       g.beginPath();
-      let cx = x + Phaser.Math.Between(-20, 20);
-      let cy = y - 280;
+      let cx = x + Phaser.Math.Between(-14, 14);
+      let cy = y - 260;
       g.moveTo(cx, cy);
       while (cy < y) {
-        cy += 35;
-        cx = x + Phaser.Math.Between(-18, 18);
+        cy += 32;
+        cx = x + Phaser.Math.Between(-14, 14);
         g.lineTo(cx, Math.min(cy, y));
       }
       g.strokePath();
-      this.spawnElectricImpact(x, y, 54);
+      this.spawnElectricImpact(x, y, 32);
+      this.dropElectricPuddle(x, y, base * 0.45);
       this.scene.tweens.add({
         targets: g,
         alpha: 0,
@@ -2295,7 +2462,7 @@ export class Player {
     if (targets.length === 0) {
       for (let i = 0; i < 3; i++) {
         const a = (Math.PI * 2 * i) / 3;
-        strike(px + Math.cos(a) * 90, py + Math.sin(a) * 90);
+        strike(px + Math.cos(a) * 70, py + Math.sin(a) * 70);
       }
       return;
     }
@@ -2321,22 +2488,23 @@ export class Player {
     });
   }
 
-  /** ULT Fogo: Lança-Chamas Devastador ('anim-especial-fogo') ancorado no bico e apontando em 'aim'! */
+  /** ULT Fogo: Lança-Chamas Devastador ('anim-especial-fogo') com Explosões em Cadeia */
   private specialFlameNova(aim: number, base: number): void {
     const px = this.sprite.x;
     const py = this.sprite.y;
     const range = 265 * this.rangeMult;
+    this.activeFlameUltTimerMs = 2800;
 
     if (
       this.scene.textures.exists('sheet-especial-fogo') &&
       this.scene.anims.exists('anim-especial-fogo')
     ) {
-      const nozzleX = px + Math.cos(aim) * 18;
-      const nozzleY = py + Math.sin(aim) * 18;
+      const nozzleX = px + Math.cos(aim) * 16;
+      const nozzleY = py + Math.sin(aim) * 16;
       const flameStream = this.scene.add
         .sprite(nozzleX, nozzleY, 'sheet-especial-fogo', 0)
         .setOrigin(0.045, 0.5) // Ancora no bico esquerdo para disparar exatamente na direção 'aim'
-        .setScale(0.95 * this.rangeMult)
+        .setScale(0.42 * this.rangeMult)
         .setRotation(aim)
         .setDepth(DEPTH.EFFECTS + 2);
       flameStream.play('anim-especial-fogo');
@@ -2355,7 +2523,7 @@ export class Player {
       const d = Phaser.Math.Distance.Between(px, py, e.sprite.x, e.sprite.y);
       if (d > range) continue;
       const angTo = Math.atan2(e.sprite.y - py, e.sprite.x - px);
-      if (Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= 0.62 || d < 32) {
+      if (Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= 0.62 || d < 28) {
         this.dealDamage(e, base * 2.35, {
           special: true,
           knockback: 330,
@@ -2373,22 +2541,25 @@ export class Player {
     }
   }
 
-  /** ULT Planta: Raio Solar Tóxico — Envenenamento Tóxico 100% garantido! */
+  /** ULT Planta: Raio Solar Tóxico + Nuvem em Cone de Pó do Sono */
   private specialSolarBeam(aim: number, base: number): void {
-    const length = 480 * this.rangeMult;
-    const halfWidth = 30;
+    const length = 460 * this.rangeMult;
+    const halfWidth = 14;
     const sx = this.sprite.x;
     const sy = this.sprite.y;
     const ex = sx + Math.cos(aim) * length;
     const ey = sy + Math.sin(aim) * length;
 
+    // Dispara a nuvem em cone de Pó do Sono
+    this.dropSleepPowderCone(aim);
+
     const charge = this.scene.add
-      .circle(sx, sy, 12, 0xfef08a, 0.85)
-      .setStrokeStyle(3, 0x4ade80, 1)
+      .circle(sx, sy, 10, 0xfef08a, 0.85)
+      .setStrokeStyle(2.5, 0x4ade80, 1)
       .setDepth(DEPTH.EFFECTS);
     this.scene.tweens.add({
       targets: charge,
-      radius: 36,
+      radius: 26,
       duration: 190,
       yoyo: true,
       onComplete: () => charge.destroy(),
@@ -2401,23 +2572,23 @@ export class Player {
       beam.lineBetween(sx, sy, ex, ey);
       beam.lineStyle(halfWidth * 1.25, 0x4ade80, 0.88);
       beam.lineBetween(sx, sy, ex, ey);
-      beam.lineStyle(10, 0xfef08a, 1);
+      beam.lineStyle(6, 0xfef08a, 1);
       beam.lineBetween(sx, sy, ex, ey);
 
       // Folhas e esporos viajando na direção do feixe (+aim)
       if (this.scene.textures.exists('sheet-attack-grass')) {
-        for (let step = 70; step < length; step += 90) {
+        for (let step = 60; step < length; step += 80) {
           const lx = sx + Math.cos(aim) * step;
           const ly = sy + Math.sin(aim) * step;
           const leafFx = this.scene.add
             .sprite(lx, ly, 'sheet-attack-grass', 5)
-            .setScale(0.6)
+            .setScale(0.24)
             .setRotation(aim)
             .setDepth(DEPTH.EFFECTS + 2);
           this.scene.tweens.add({
             targets: leafFx,
-            x: lx + Math.cos(aim) * 55,
-            y: ly + Math.sin(aim) * 55,
+            x: lx + Math.cos(aim) * 45,
+            y: ly + Math.sin(aim) * 45,
             alpha: 0,
             duration: 360,
             onComplete: () => leafFx.destroy(),
@@ -2458,7 +2629,6 @@ export class Player {
             knockback: 180,
             skipBasicProc: true,
           });
-          // ULT do Bulbasaur SEMPRE aplica Envenenamento Tóxico!
           e.applyStatusEffect({
             slowFactor: 0.35,
             slowDurationMs: 3400,
@@ -2472,11 +2642,38 @@ export class Player {
     });
   }
 
-  /** ULT Água: Hidro Vórtice ('anim-especial-agua') centralizado com Encharcar garantido! */
+  /** ULT Água: Hidro Vórtice + Bolha Protetora de 50% de Redução */
   private specialHydroVortex(aim: number, base: number): void {
-    const radius = 195 * this.rangeMult;
-    const cx = this.sprite.x + Math.cos(aim) * 80;
-    const cy = this.sprite.y + Math.sin(aim) * 80;
+    const radius = 175 * this.rangeMult;
+    const cx = this.sprite.x + Math.cos(aim) * 70;
+    const cy = this.sprite.y + Math.sin(aim) * 70;
+
+    // Bolha Protetora do Squirtle (-50% dano recebido por 5s)
+    this.hydroBubbleTimerMs = 5000;
+    const bubble = this.scene.add
+      .circle(this.sprite.x, this.sprite.y, 24, 0x5ec8ff, 0.28)
+      .setStrokeStyle(3, 0xbfeaff, 0.9)
+      .setDepth(DEPTH.EFFECTS + 1);
+
+    this.scene.tweens.add({
+      targets: bubble,
+      alpha: 0,
+      delay: 4500,
+      duration: 500,
+      onComplete: () => bubble.destroy(),
+    });
+
+    const followEvent = this.scene.time.addEvent({
+      delay: 16,
+      loop: true,
+      callback: () => {
+        if (!bubble.active) {
+          followEvent.remove();
+          return;
+        }
+        bubble.setPosition(this.sprite.x, this.sprite.y);
+      },
+    });
 
     if (
       this.scene.textures.exists('sheet-especial-agua') &&
@@ -2484,12 +2681,12 @@ export class Player {
     ) {
       const vortexSpr = this.scene.add
         .sprite(cx, cy, 'sheet-especial-agua', 0)
-        .setScale(0.95)
+        .setScale(0.40)
         .setDepth(DEPTH.EFFECTS + 1);
       vortexSpr.play('anim-especial-agua');
       this.scene.tweens.add({
         targets: vortexSpr,
-        scale: 1.32,
+        scale: 0.52,
         rotation: Math.PI * 0.65,
         alpha: 0,
         delay: 420,
@@ -2527,12 +2724,12 @@ export class Player {
 
     this.scene.time.delayedCall(580, () => {
       const burst = this.scene.add
-        .circle(cx, cy, 24, 0x00b4d8, 0.58)
-        .setStrokeStyle(5, 0xffffff, 1)
+        .circle(cx, cy, 20, 0x00b4d8, 0.58)
+        .setStrokeStyle(4, 0xffffff, 1)
         .setDepth(DEPTH.EFFECTS + 2);
       this.scene.tweens.add({
         targets: burst,
-        radius: radius * 1.05,
+        radius: radius * 0.85,
         alpha: 0,
         duration: 320,
         onComplete: () => burst.destroy(),
@@ -2541,7 +2738,7 @@ export class Player {
         if (e.isDead) continue;
         if (
           Phaser.Math.Distance.Between(cx, cy, e.sprite.x, e.sprite.y) <=
-          radius * 1.05
+          radius * 0.85
         ) {
           this.dealDamage(e, base * 1.15, {
             special: true,
@@ -2563,10 +2760,11 @@ export class Player {
 
     this.heal(Math.round(this.maxHp * 0.24 * this.healEfficiency));
     this.supportBuffTimerMs = 6500;
+    this.invulnerableMs = Math.max(this.invulnerableMs, 1200);
 
     const mandala = this.scene.add
-      .circle(px, py, 26, 0xffb3c6, 0.3)
-      .setStrokeStyle(4, 0xff69b4, 1)
+      .circle(px, py, 20, 0xffb3c6, 0.3)
+      .setStrokeStyle(3.5, 0xff69b4, 1)
       .setDepth(DEPTH.EFFECTS + 1);
 
     this.scene.tweens.add({
@@ -2589,13 +2787,7 @@ export class Player {
           fromY: py,
           skipBasicProc: true,
         });
-        e.applyStatusEffect({
-          slowFactor: 0,
-          slowDurationMs: 2900,
-          tintColor: 0xc8b6ff,
-          showSleepIcon: true,
-          statusIcon: '💤',
-        });
+        e.dormir(e.isBoss ? 2000 : 3800);
       }
     }
   }

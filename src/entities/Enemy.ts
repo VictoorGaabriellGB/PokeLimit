@@ -36,6 +36,17 @@ export class Enemy {
   private bossSkillTimerMs = 0;
   private sleepIcon: Phaser.GameObjects.Text | null = null;
 
+  // Mecânicas avançadas de Sono (Bulbasaur Pó do Sono / Jigglypuff)
+  public isSleeping = false;
+  public sleepRemainingMs = 0;
+
+  // Máquina de estados da investida telegrafada do Boss Onix
+  public onixPhase: 'pursue' | 'warning' | 'charge' | 'rest' = 'pursue';
+  public onixPhaseTimerMs = 0;
+  public onixChargeAngle = 0;
+  public onixWarningGfx: Phaser.GameObjects.Rectangle | null = null;
+  public isCharging = false;
+
   constructor(
     scene: Phaser.Scene,
     x: number,
@@ -76,15 +87,52 @@ export class Enemy {
   }
 
   getContactRadius(): number {
-    return this.isBoss ? 38 : 20;
+    if (this.isSleeping) return 0;
+    return this.isBoss ? (this.isCharging ? 46 : 36) : 20;
   }
 
   isIncapacitated(): boolean {
-    return this.slowTimerMs > 0 && this.slowFactor < 0.05;
+    return (this.slowTimerMs > 0 && this.slowFactor < 0.05) || this.isSleeping;
+  }
+
+  dormir(ms: number): void {
+    if (this.isDead) return;
+    const effectiveMs = this.isBoss ? Math.min(2000, Math.round(ms * 0.5)) : ms;
+    this.isSleeping = true;
+    this.sleepRemainingMs = effectiveMs;
+    this.sprite.setVelocity(0, 0);
+    this.currentState = 'Idle';
+    this.playAnim(true);
+
+    if (this.onixWarningGfx) {
+      this.onixWarningGfx.destroy();
+      this.onixWarningGfx = null;
+    }
+
+    if (!this.sleepIcon) {
+      this.sleepIcon = this.scene.add
+        .text(
+          this.sprite.x + 8,
+          this.sprite.y - (this.isBoss ? 50 : 26),
+          'z z',
+          {
+            fontFamily: 'monospace',
+            fontSize: this.isBoss ? '18px' : '14px',
+            fontStyle: 'bold',
+            color: '#e8dcff',
+            stroke: '#4a3a8a',
+            strokeThickness: 3.5,
+          }
+        )
+        .setOrigin(0.5)
+        .setDepth(DEPTH.FLOATING_TEXT + 1);
+    } else {
+      this.sleepIcon.setText('z z');
+    }
   }
 
   hasSlowOrParalysis(): boolean {
-    return this.slowTimerMs > 0;
+    return this.slowTimerMs > 0 || this.isSleeping;
   }
 
   update(
@@ -92,9 +140,31 @@ export class Enemy {
     targetX: number,
     targetY: number,
     onEnemyDeath?: () => void,
-    onBossHazardHitPlayer?: (damage: number) => void
+    onBossHazardHitPlayer?: (damage: number) => void,
+    onBossChargeStarted?: (startX: number, startY: number) => void,
+    onBossChargeStep?: (currX: number, currY: number) => void
   ): void {
     if (this.isDead) return;
+
+    // Mecânica de Sono (Pó do Sono / Canção)
+    if (this.isSleeping) {
+      this.sleepRemainingMs -= delta;
+      this.sprite.setVelocity(0, 0);
+      if (this.sleepIcon) {
+        this.sleepIcon.setPosition(
+          this.sprite.x + 8,
+          this.sprite.y -
+            (this.isBoss ? 52 : 26) +
+            Math.sin(this.scene.time.now / 220) * 3
+        );
+      }
+      if (this.sleepRemainingMs <= 0) {
+        this.isSleeping = false;
+        this.clearSleepIcon();
+      }
+      this.syncShadowAndDepth();
+      return;
+    }
 
     if (this.slowTimerMs > 0) {
       this.slowTimerMs -= delta;
@@ -134,20 +204,11 @@ export class Enemy {
       }
     }
 
-    if (this.sleepIcon) {
+    if (this.sleepIcon && !this.isSleeping) {
       this.sleepIcon.setPosition(
         this.sprite.x + 10,
         this.sprite.y - (this.isBoss ? 52 : 26)
       );
-    }
-
-    // Ataques especiais periódicos do Boss Onix
-    if (this.isBoss && !this.isIncapacitated()) {
-      this.bossSkillTimerMs += delta;
-      if (this.bossSkillTimerMs >= 2900) {
-        this.bossSkillTimerMs = 0;
-        this.executeBossSkill(targetX, targetY, onBossHazardHitPlayer);
-      }
     }
 
     if (this.knockbackTimer > 0) {
@@ -156,13 +217,130 @@ export class Enemy {
       return;
     }
 
+    // ===================== BOSS ONIX — INVESTIDA TELEGRAFADA (CHEFES.onix) =====================
+    if (this.isBoss) {
+      this.onixPhaseTimerMs += delta;
+
+      if (this.onixPhase === 'pursue') {
+        this.isCharging = false;
+        const dx = targetX - this.sprite.x;
+        const dy = targetY - this.sprite.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist > 30) {
+          const vx = (dx / dist) * 115 * this.slowFactor;
+          const vy = (dy / dist) * 115 * this.slowFactor;
+          this.sprite.setVelocity(vx, vy);
+          this.currentDir = PokemonAnimationManager.vectorToDirection(
+            vx,
+            vy,
+            this.currentDir
+          );
+          this.currentState = 'Walk';
+          this.playAnim(false);
+        } else {
+          this.sprite.setVelocity(0, 0);
+          this.currentState = 'Idle';
+          this.playAnim(false);
+        }
+
+        if (this.onixPhaseTimerMs >= 2600) {
+          this.onixPhase = 'warning';
+          this.onixPhaseTimerMs = 0;
+          this.sprite.setVelocity(0, 0);
+          this.onixChargeAngle = Math.atan2(
+            targetY - this.sprite.y,
+            targetX - this.sprite.x
+          );
+          this.currentDir = PokemonAnimationManager.vectorToDirection(
+            Math.cos(this.onixChargeAngle),
+            Math.sin(this.onixChargeAngle),
+            this.currentDir
+          );
+          this.currentState = 'Idle';
+          this.playAnim(true);
+
+          if (this.onixWarningGfx) {
+            this.onixWarningGfx.destroy();
+          }
+          this.onixWarningGfx = this.scene.add
+            .rectangle(
+              this.sprite.x,
+              this.sprite.y,
+              440,
+              110,
+              0xef4444,
+              0.28
+            )
+            .setOrigin(0, 0.5)
+            .setRotation(this.onixChargeAngle)
+            .setDepth(DEPTH.SHADOW + 1);
+        }
+      } else if (this.onixPhase === 'warning') {
+        this.sprite.setVelocity(0, 0);
+        this.currentState = 'Idle';
+        this.playAnim(false);
+
+        if (this.onixWarningGfx) {
+          const pulse =
+            0.2 + 0.26 * Math.abs(Math.sin(this.onixPhaseTimerMs / 70));
+          this.onixWarningGfx.setAlpha(pulse);
+        }
+
+        if (this.onixPhaseTimerMs >= 900) {
+          if (this.onixWarningGfx) {
+            this.onixWarningGfx.destroy();
+            this.onixWarningGfx = null;
+          }
+          this.onixPhase = 'charge';
+          this.onixPhaseTimerMs = 0;
+          this.isCharging = true;
+          this.currentState = 'Attack';
+          this.playAnim(true);
+          this.scene.cameras.main.shake(160, 0.005);
+          onBossChargeStarted?.(this.sprite.x, this.sprite.y);
+        }
+      } else if (this.onixPhase === 'charge') {
+        this.isCharging = true;
+        const vx = Math.cos(this.onixChargeAngle) * 620;
+        const vy = Math.sin(this.onixChargeAngle) * 620;
+        this.sprite.setVelocity(vx, vy);
+        this.currentState = 'Attack';
+        this.playAnim(false);
+        onBossChargeStep?.(this.sprite.x, this.sprite.y);
+
+        if (this.onixPhaseTimerMs >= 700) {
+          this.onixPhase = 'rest';
+          this.onixPhaseTimerMs = 0;
+          this.isCharging = false;
+          this.sprite.setVelocity(0, 0);
+          this.currentState = 'Idle';
+          this.playAnim(true);
+        }
+      } else if (this.onixPhase === 'rest') {
+        this.isCharging = false;
+        this.sprite.setVelocity(0, 0);
+        this.currentState = 'Idle';
+        this.playAnim(false);
+
+        if (this.onixPhaseTimerMs >= 1000) {
+          this.onixPhase = 'pursue';
+          this.onixPhaseTimerMs = 0;
+        }
+      }
+
+      this.syncShadowAndDepth();
+      return;
+    }
+
+    // Inimigos comuns
     const dx = targetX - this.sprite.x;
     const dy = targetY - this.sprite.y;
     const dist = Math.hypot(dx, dy);
 
     if (this.isIncapacitated()) {
       this.sprite.setVelocity(0, 0);
-    } else if (dist > (this.isBoss ? 32 : 18)) {
+    } else if (dist > 18) {
       const effectiveSpeed = this.pokemonDef.speed * this.slowFactor;
       const vx = (dx / dist) * effectiveSpeed;
       const vy = (dy / dist) * effectiveSpeed;
@@ -422,6 +600,11 @@ export class Enemy {
     this.isDead = true;
     this.sprite.body.enable = false;
     this.clearSleepIcon();
+
+    if (this.onixWarningGfx) {
+      this.onixWarningGfx.destroy();
+      this.onixWarningGfx = null;
+    }
 
     this.scene.tweens.add({
       targets: [this.sprite, this.shadow],

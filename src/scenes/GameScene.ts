@@ -43,6 +43,17 @@ interface ModalCardSlot {
   baseY: number;
 }
 
+interface BossRockTrail {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  t: number;
+  durationMs: number;
+  width: number;
+  damage: number;
+}
+
 export class GameScene extends Phaser.Scene {
   private selectedPokemonId = '0025';
   private mapManager!: MapManager;
@@ -55,6 +66,8 @@ export class GameScene extends Phaser.Scene {
   private bossEnemy: Enemy | null = null;
   private bossEncounterStarted = false;
   private bossDefeated = false;
+  private bossRockTrails: BossRockTrail[] = [];
+  private bossRockTrailsGfx!: Phaser.GameObjects.Graphics;
 
   private runTimeSeconds = 0;
   private mapElapsedSeconds = 0;
@@ -182,6 +195,9 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.setZoom(CAMERA_ZOOM);
     this.cameras.main.startFollow(this.player.sprite, true, 0.12, 0.12);
 
+    this.bossRockTrails = [];
+    this.bossRockTrailsGfx = this.add.graphics().setDepth(DEPTH.SHADOW + 1);
+
     this.setupShortcuts();
     this.createHud();
     this.showBanner(`📍 ${this.mapManager.getCurrentMapDefinition().name}`);
@@ -235,20 +251,27 @@ export class GameScene extends Phaser.Scene {
       this.compassText.setVisible(false);
     }
 
-    // 2. Spawner de inimigos
+    // 2. Spawner de Horda Survivor (Ritmo, densidade e lotes inspirados na referência)
     this.spawnTimerMs += delta;
     const isBossActive = Boolean(this.bossEnemy && !this.bossEnemy.isDead);
     const maxEnemies = isBossActive
-      ? 5
-      : Math.min(26, 16 + Math.floor(this.runTimeSeconds / 30) * 2);
-    const spawnInterval = isBossActive ? 5200 : 2000;
+      ? 6
+      : Math.min(65, 24 + Math.floor(this.runTimeSeconds / 20) * 4);
+
+    const baseInterval = Math.max(380, 1500 - Math.floor(this.runTimeSeconds * 8));
+    const spawnInterval = isBossActive ? 4800 : baseInterval;
 
     if (this.spawnTimerMs >= spawnInterval && this.enemies.length < maxEnemies) {
       this.spawnTimerMs = 0;
-      this.spawnWildPokemon();
+      const batchCount = isBossActive
+        ? 1
+        : Math.min(5, 1 + Math.floor(this.runTimeSeconds / 25));
+      for (let b = 0; b < batchCount && this.enemies.length < maxEnemies; b++) {
+        this.spawnWildPokemon();
+      }
     }
 
-    // 3. Atualiza inimigos e verifica dano de contato (acionando passivas inatas de contato!)
+    // 3. Atualiza inimigos e verifica investidas/danos
     this.enemies = this.enemies.filter((enemy) => {
       if (enemy.isDead) return false;
 
@@ -270,10 +293,29 @@ export class GameScene extends Phaser.Scene {
           if (distNow <= 56) {
             this.player.receiveDamage(hazardDamage);
           }
+        },
+        (startX, startY) => {
+          this.bossRockTrails.push({
+            x0: startX,
+            y0: startY,
+            x1: startX,
+            y1: startY,
+            t: 0,
+            durationMs: 7000,
+            width: 52,
+            damage: 11,
+          });
+        },
+        (currX, currY) => {
+          if (this.bossRockTrails.length > 0) {
+            const last = this.bossRockTrails[this.bossRockTrails.length - 1];
+            last.x1 = currX;
+            last.y1 = currY;
+          }
         }
       );
 
-      if (!enemy.isDead && !enemy.isIncapacitated()) {
+      if (!enemy.isDead && !enemy.isIncapacitated() && !enemy.isSleeping) {
         const distToPlayer = Phaser.Math.Distance.Between(
           px,
           py,
@@ -282,7 +324,7 @@ export class GameScene extends Phaser.Scene {
         );
         if (distToPlayer <= enemy.getContactRadius()) {
           const contactDmg = enemy.isBoss
-            ? 22
+            ? (enemy.isCharging ? 45 : 22)
             : 8 + this.mapManager.mapsCleared * 2;
           this.player.receiveDamage(contactDmg, enemy);
         }
@@ -291,10 +333,39 @@ export class GameScene extends Phaser.Scene {
       return !enemy.isDead;
     });
 
-    // 4. Atualiza Orbes de XP
+    // 4. Atualiza Orbes de XP e Trilhas de Rocha do Boss
     this.updateXpOrbs(delta, px, py);
+    this.updateBossRockTrails(delta);
 
-    // 5. Modal de escolha de Habilidade ou Transição Nível 10 para Boss
+    // 5. Confinamento na Arena do Boss Onix (ninguém sai da arena no mapa 5)
+    if (this.mapManager.isBossMapActive()) {
+      const bounds = this.mapManager.getCurrentMapBounds();
+      const pad = 36;
+      this.player.sprite.x = Phaser.Math.Clamp(
+        this.player.sprite.x,
+        bounds.x + pad,
+        bounds.x + bounds.width - pad
+      );
+      this.player.sprite.y = Phaser.Math.Clamp(
+        this.player.sprite.y,
+        bounds.y + pad,
+        bounds.y + bounds.height - pad
+      );
+      if (this.bossEnemy && !this.bossEnemy.isDead) {
+        this.bossEnemy.sprite.x = Phaser.Math.Clamp(
+          this.bossEnemy.sprite.x,
+          bounds.x + pad,
+          bounds.x + bounds.width - pad
+        );
+        this.bossEnemy.sprite.y = Phaser.Math.Clamp(
+          this.bossEnemy.sprite.y,
+          bounds.y + pad,
+          bounds.y + bounds.height - pad
+        );
+      }
+    }
+
+    // 6. Modal de escolha de Habilidade ou Transição Nível 10 para Boss
     if (this.pendingAbilityPicks > 0 && !this.isModalOpen) {
       this.openAbilityChoiceModal();
     } else if (
@@ -315,6 +386,9 @@ export class GameScene extends Phaser.Scene {
     const x = enemy.sprite.x;
     const y = enemy.sprite.y;
     this.defeatedCount++;
+
+    // Carga dual da ultimate (+3.33% por abate comum, +50% por chefe) & proc de morte
+    this.player.onEnemyKilled(enemy);
 
     if (enemy.isBoss) {
       this.onBossDefeated();
@@ -428,6 +502,103 @@ export class GameScene extends Phaser.Scene {
     this.cameras.main.flash(450, 255, 230, 120);
 
     this.openVictoryModal();
+  }
+
+  private updateBossRockTrails(delta: number): void {
+    if (!this.bossRockTrailsGfx) return;
+    this.bossRockTrailsGfx.clear();
+
+    const px = this.player.sprite.x;
+    const py = this.player.sprite.y;
+
+    for (let i = this.bossRockTrails.length - 1; i >= 0; i--) {
+      const m = this.bossRockTrails[i];
+      m.t += delta;
+      if (m.t >= m.durationMs) {
+        this.bossRockTrails.splice(i, 1);
+        continue;
+      }
+
+      const fade = Math.min(1, (1 - m.t / m.durationMs) * 3.5);
+      const pulse = 0.8 + 0.2 * Math.sin(m.t / 140);
+
+      // Linha exterior de rocha esfarelada e cinzas
+      this.bossRockTrailsGfx.lineStyle(m.width, 0x44403c, 0.7 * fade);
+      this.bossRockTrailsGfx.lineBetween(m.x0, m.y0, m.x1, m.y1);
+
+      // Trilha interna de magma incandescente
+      this.bossRockTrailsGfx.lineStyle(
+        m.width * 0.42,
+        0xd97706,
+        0.85 * fade * pulse
+      );
+      this.bossRockTrailsGfx.lineBetween(m.x0, m.y0, m.x1, m.y1);
+
+      // Distância do jogador ao segmento (m.x0, m.y0) -> (m.x1, m.y1)
+      const dx = m.x1 - m.x0;
+      const dy = m.y1 - m.y0;
+      const lenSq = dx * dx + dy * dy;
+      let dist = 999;
+      if (lenSq === 0) {
+        dist = Math.hypot(px - m.x0, py - m.y0);
+      } else {
+        const u = Phaser.Math.Clamp(
+          ((px - m.x0) * dx + (py - m.y0) * dy) / lenSq,
+          0,
+          1
+        );
+        const closestX = m.x0 + u * dx;
+        const closestY = m.y0 + u * dy;
+        dist = Math.hypot(px - closestX, py - closestY);
+      }
+
+      if (dist <= m.width / 2 + 6 && this.player.invulnerableMs <= 0) {
+        this.player.receiveDamage(m.damage);
+      }
+    }
+  }
+
+  public triggerCinematicSlowMo(ultName: string): void {
+    this.time.timeScale = 0.3;
+    this.tweens.add({
+      targets: this.time,
+      timeScale: 1.0,
+      delay: 450,
+      duration: 350,
+      ease: 'Cubic.easeOut',
+    });
+
+    this.cameras.main.flash(180, 255, 255, 255);
+    this.cameras.main.shake(220, 0.005);
+
+    const center = this.toZoomedHudCoord(
+      GAME_SETTINGS.WIDTH / 2,
+      GAME_SETTINGS.HEIGHT * 0.28
+    );
+    const banner = this.add
+      .text(center.x, center.y, ultName.toUpperCase(), {
+        fontFamily: 'monospace',
+        fontSize: '24px',
+        fontStyle: 'bold',
+        color: '#ffe629',
+        stroke: '#000000',
+        strokeThickness: 5,
+      })
+      .setOrigin(0.5)
+      .setScrollFactor(0)
+      .setDepth(DEPTH.HUD + 85)
+      .setScale(0.7 * center.scale);
+
+    this.tweens.add({
+      targets: banner,
+      scale: 1.15 * center.scale,
+      y: center.y - 20 * center.scale,
+      alpha: { from: 1, to: 0 },
+      delay: 450,
+      duration: 550,
+      ease: 'Cubic.easeOut',
+      onComplete: () => banner.destroy(),
+    });
   }
 
   // ===================== MENU DE PAUSA [ESC] (3 OPÇÕES) =====================
@@ -1263,6 +1434,11 @@ export class GameScene extends Phaser.Scene {
       orb.gfx.destroy();
     }
     this.xpOrbs = [];
+
+    this.bossRockTrails = [];
+    if (this.bossRockTrailsGfx) {
+      this.bossRockTrailsGfx.clear();
+    }
   }
 
   private onPlayerCompletedMapTransition(newMapName: string): void {
