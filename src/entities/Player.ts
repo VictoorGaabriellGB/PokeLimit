@@ -375,6 +375,10 @@ export class Player {
     return this.painPortraitTimerMs > 0 || this.isDead;
   }
 
+  isInvulnerable(): boolean {
+    return this.invulnerableMs > 0;
+  }
+
   private get profile(): PokemonAttackProfile {
     return this.pokemonDef.attackProfile!;
   }
@@ -1892,48 +1896,6 @@ export class Player {
     });
   }
 
-  private dropSleepPowderCone(aim: number): void {
-    const range = 380 * this.rangeMult;
-    const halfAngle = 0.58;
-    const sx = this.sprite.x;
-    const sy = this.sprite.y;
-
-    for (let i = 0; i < 18; i++) {
-      const a = aim + Phaser.Math.FloatBetween(-halfAngle, halfAngle) * 0.92;
-      const dist = Phaser.Math.Between(50, range);
-      const color = Phaser.Utils.Array.GetRandom([
-        0xb59cff, 0x9ad66a, 0xd6c7ff,
-      ]);
-      const p = this.scene.add
-        .circle(sx, sy, Phaser.Math.Between(4, 8), color, 0.75)
-        .setDepth(DEPTH.EFFECTS + 1);
-      this.scene.tweens.add({
-        targets: p,
-        x: sx + Math.cos(a) * dist,
-        y: sy + Math.sin(a) * dist,
-        scale: 1.6,
-        alpha: 0,
-        duration: 550 + i * 20,
-        onComplete: () => p.destroy(),
-      });
-    }
-
-    for (const e of this.enemiesProvider()) {
-      if (e.isDead) continue;
-      const dx = e.sprite.x - sx;
-      const dy = e.sprite.y - sy;
-      const dist = Math.hypot(dx, dy);
-      if (dist > range) continue;
-      const angTo = Math.atan2(dy, dx);
-      if (
-        Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= halfAngle ||
-        dist < 30
-      ) {
-        e.dormir(e.isBoss ? 2000 : 4000);
-      }
-    }
-  }
-
   // ===================== DISPARO E ANIMAÇÕES DE ATAQUE DIRECIONAIS =====================
 
   private executeBasicAttack(): boolean {
@@ -2527,34 +2489,7 @@ export class Player {
       });
 
       // Poça de choque residual no chão que causa dano e lentidão a quem passar
-      const puddle = this.scene.add
-        .circle(x, y, 36, 0xb89b00, 0.38)
-        .setStrokeStyle(2.5, 0xfef08a, 0.85)
-        .setDepth(DEPTH.SHADOW + 1);
-      
-      const puddleTimer = this.scene.time.addEvent({
-        delay: 240,
-        repeat: 7,
-        callback: () => {
-          if (!puddle.active) return;
-          for (const e of this.enemiesProvider()) {
-            if (e.isDead) continue;
-            if (Phaser.Math.Distance.Between(x, y, e.sprite.x, e.sprite.y) <= 38) {
-              this.dealDamage(e, base * 0.3, { secondary: true, skipBasicProc: true });
-              e.applyStatusEffect({ slowFactor: 0.4, slowDurationMs: 600, tintColor: 0xfef08a, statusIcon: '⚡' });
-            }
-          }
-        }
-      });
-      this.scene.tweens.add({
-        targets: puddle,
-        alpha: 0,
-        duration: 2000,
-        onComplete: () => {
-          puddleTimer.remove();
-          puddle.destroy();
-        }
-      });
+      this.dropElectricPuddle(x, y, base * 0.35);
     };
 
     if (targets.length === 0) {

@@ -40,6 +40,11 @@ export class Enemy {
   private bossSkillTimerMs = 0;
   private sleepIcon: Phaser.GameObjects.Text | null = null;
   private sleepTimerMs = 0;
+  public isCharging = false;
+  private onixPhase: 'pursue' | 'warning' | 'charge' | 'rest' = 'pursue';
+  private onixPhaseTimerMs = 0;
+  private onixChargeAngle = 0;
+  private onixWarningGfx: Phaser.GameObjects.Rectangle | null = null;
 
   constructor(
     scene: Phaser.Scene,
@@ -114,6 +119,10 @@ export class Enemy {
     );
   }
 
+  dormir(durationMs = 3000): void {
+    this.applySleep(durationMs);
+  }
+
   isSleeping(): boolean {
     return this.sleepTimerMs > 0;
   }
@@ -151,7 +160,7 @@ export class Enemy {
   }
 
   hasSlowOrParalysis(): boolean {
-    return this.slowTimerMs > 0 || this.isSleeping;
+    return this.slowTimerMs > 0 || this.isSleeping();
   }
 
   update(
@@ -851,6 +860,10 @@ export class Enemy {
   destroy(): void {
     this.isDead = true;
     this.clearSleepIcon();
+    if (this.onixWarningGfx) {
+      this.onixWarningGfx.destroy();
+      this.onixWarningGfx = null;
+    }
     this.shadow.destroy();
     if (this.minibossAura) {
       this.minibossAura.destroy();
@@ -908,6 +921,10 @@ export class Enemy {
     this.isDead = true;
     this.sprite.body.enable = false;
     this.clearSleepIcon();
+    if (this.onixWarningGfx) {
+      this.onixWarningGfx.destroy();
+      this.onixWarningGfx = null;
+    }
 
     const targets: Phaser.GameObjects.GameObject[] = [this.sprite, this.shadow];
     if (this.minibossAura) targets.push(this.minibossAura);

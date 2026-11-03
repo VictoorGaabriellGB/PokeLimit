@@ -778,7 +778,7 @@ export class GameScene extends Phaser.Scene {
         dist = Math.hypot(px - closestX, py - closestY);
       }
 
-      if (dist <= m.width / 2 + 6 && this.player.invulnerableMs <= 0) {
+      if (dist <= m.width / 2 + 6 && !this.player.isInvulnerable()) {
         this.player.receiveDamage(m.damage);
       }
     }
