@@ -5,6 +5,9 @@ import {
   MapDefinition,
 } from '../config/pokemonManifest';
 import { DEPTH } from './depth';
+import { MAP_LAYOUTS, NormalizedBox } from '../config/mapLayouts';
+
+export type MapCellType = 'walkable' | 'water' | 'building' | 'boundary';
 
 const RAW_CELL_SIZE = 16;
 /** Abertura física da pontezinha entre os mapas (meia-largura em px do mundo) */
@@ -19,78 +22,7 @@ const SEAM_BRIDGE_HEIGHT = 380;
 */
 const ENTRY_DISTANCE_PAST_SEAM = 340;
 
-interface NormalizedBox {
-  x0: number;
-  x1: number;
-  y0: number;
-  y1: number;
-}
-
-/**
- * Caixas de colisão explícitas (em coordenadas normalizadas da imagem original 0..1)
- * para todas as casas, ginásios, laboratórios, cercas e guaritas de cada mapa,
- * garantindo que telhados e paredes brancas/cinzas bloqueiem 100% sem afetar as estradas!
- */
-const MAP_SOLID_BOXES: Record<string, NormalizedBox[]> = {
-  map1: [
-    // Casa superior esquerda (Red's House + placa)
-    { x0: 0.365, x1: 0.472, y0: 0.478, y1: 0.533 },
-    // Casa superior direita (Blue's House + placa)
-    { x0: 0.518, x1: 0.622, y0: 0.478, y1: 0.533 },
-    // Laboratório do Prof. Carvalho
-    { x0: 0.514, x1: 0.635, y0: 0.539, y1: 0.594 },
-    // Cerca de madeira esquerda + canteiro
-    { x0: 0.378, x1: 0.472, y0: 0.556, y1: 0.573 },
-    // Cerca de madeira inferior (acima do lago)
-    { x0: 0.514, x1: 0.622, y0: 0.606, y1: 0.624 },
-  ],
-  map2: [
-    // Guarita norte esquerda
-    { x0: 0.362, x1: 0.438, y0: 0.054, y1: 0.098 },
-    // Casa de telhado azul norte
-    { x0: 0.482, x1: 0.548, y0: 0.128, y1: 0.166 },
-    // Guarita central esquerda
-    { x0: 0.344, x1: 0.438, y0: 0.345, y1: 0.402 },
-    // Guarita central direita
-    { x0: 0.510, x1: 0.578, y0: 0.345, y1: 0.395 },
-    // Ginásio / Prédio laranja maior na cidade
-    { x0: 0.558, x1: 0.654, y0: 0.630, y1: 0.684 },
-    // Casa verde superior esquerda na cidade
-    { x0: 0.450, x1: 0.520, y0: 0.652, y1: 0.692 },
-    // Casa verde central esquerda na cidade
-    { x0: 0.450, x1: 0.520, y0: 0.708, y1: 0.748 },
-    // PokéMart (telhado azul)
-    { x0: 0.570, x1: 0.636, y0: 0.708, y1: 0.748 },
-    // Pokémon Center (telhado vermelho)
-    { x0: 0.450, x1: 0.520, y0: 0.764, y1: 0.808 },
-  ],
-  map3: [
-    // Guarita superior esquerda
-    { x0: 0.088, x1: 0.238, y0: 0.025, y1: 0.125 },
-    // Guarita inferior central (caso visível)
-    { x0: 0.425, x1: 0.572, y0: 0.730, y1: 0.840 },
-  ],
-  map4: [
-    // Grande Prédio / Ginásio norte + cercas frontais
-    { x0: 0.290, x1: 0.606, y0: 0.026, y1: 0.126 },
-    { x0: 0.266, x1: 0.422, y0: 0.132, y1: 0.150 },
-    { x0: 0.476, x1: 0.632, y0: 0.132, y1: 0.150 },
-    // Casa cinza superior direita
-    { x0: 0.626, x1: 0.728, y0: 0.254, y1: 0.304 },
-    // PokéMart (telhado azul)
-    { x0: 0.558, x1: 0.634, y0: 0.338, y1: 0.390 },
-    // Pokémon Center (telhado vermelho)
-    { x0: 0.368, x1: 0.454, y0: 0.420, y1: 0.474 },
-    // Casa cinza inferior esquerda
-    { x0: 0.274, x1: 0.352, y0: 0.470, y1: 0.522 },
-    // Cerca do jardim florido à direita
-    { x0: 0.554, x1: 0.734, y0: 0.454, y1: 0.528 },
-    // Monte / Entrada da caverna cercada
-    { x0: 0.548, x1: 0.682, y0: 0.678, y1: 0.756 },
-    // Entrada de caverna na encosta esquerda
-    { x0: 0.028, x1: 0.105, y0: 0.562, y1: 0.606 },
-  ],
-};
+// MAP_LAYOUTS importado de '../config/mapLayouts' com caixas e zonas modulares precisas
 
 interface ActiveMapInstance {
   def: MapDefinition;
@@ -104,6 +36,7 @@ interface ActiveMapInstance {
   cols: number;
   rows: number;
   blockedGrid: boolean[][];
+  cellTypeGrid: MapCellType[][];
   obstacleZones: Phaser.GameObjects.Zone[];
   pixels: Uint8ClampedArray;
   rawW: number;
@@ -160,6 +93,45 @@ export class MapManager {
       false
     );
     this.applySingleMapWorldBounds(this.currentMap);
+  }
+
+  
+  public getCellTypeAt(worldX: number, worldY: number): MapCellType {
+    const checkMap = (m: ActiveMapInstance | null): MapCellType | null => {
+      if (!m) return null;
+      if (
+        worldX < m.x ||
+        worldX >= m.x + m.width ||
+        worldY < m.y ||
+        worldY >= m.y + m.height
+      ) {
+        return null;
+      }
+      const c = Math.floor((worldX - m.x) / m.cellSize);
+      const r = Math.floor((worldY - m.y) / m.cellSize);
+      if (r >= 0 && r < m.rows && c >= 0 && c < m.cols) {
+        return m.cellTypeGrid?.[r]?.[c] ?? 'walkable';
+      }
+      return null;
+    };
+
+    const cur = checkMap(this.currentMap);
+    if (cur !== null) return cur;
+    const nxt = checkMap(this.pendingNextMap);
+    if (nxt !== null) return nxt;
+    return 'boundary';
+  }
+
+  public update(_delta: number): void {
+    // MapManager frame update
+  }
+
+  public isWaterAt(worldX: number, worldY: number): boolean {
+    return this.getCellTypeAt(worldX, worldY) === 'water';
+  }
+
+  public isBuildingAt(worldX: number, worldY: number): boolean {
+    return this.getCellTypeAt(worldX, worldY) === 'building';
   }
 
   getObstaclesGroup(): Phaser.Physics.Arcade.StaticGroup {
@@ -257,6 +229,19 @@ export class MapManager {
       bossMap.y + bossMap.height * 0.46
     );
 
+    return { playerSpawn, bossSpawn };
+  }
+
+  getBossArenaSpawns(): { playerSpawn: { x: number; y: number }; bossSpawn: { x: number; y: number } } {
+    const bossMap = this.currentMap;
+    const playerSpawn = this.findNearestWalkablePosition(
+      bossMap.x + bossMap.width * 0.5,
+      bossMap.y + bossMap.height * 0.71
+    );
+    const bossSpawn = this.findNearestWalkablePosition(
+      bossMap.x + bossMap.width * 0.5,
+      bossMap.y + bossMap.height * 0.46
+    );
     return { playerSpawn, bossSpawn };
   }
 
@@ -596,6 +581,7 @@ export class MapManager {
     const addWall = (x: number, y: number, w: number, h: number) => {
       if (w <= 0 || h <= 0) return;
       const z = this.scene.add.zone(x + w / 2, y + h / 2, w, h);
+z.setData('obstacleType', 'boundary');
       this.scene.physics.add.existing(z, true);
       this.obstacleGroup.add(z);
       this.transitionWallZones.push(z);
@@ -915,17 +901,20 @@ export class MapManager {
       cellSize: RAW_CELL_SIZE * def.worldScale,
       cols,
       rows,
-      blockedGrid: this.computeCleanCollisionGrid(
-        pixels,
-        rawW,
-        rawH,
-        fullRawH,
-        def,
-        cols,
-        rows,
-        southGateOpen,
-        northGateOpen
-      ),
+      ...(() => {
+        const { blockedGrid, cellTypeGrid } = this.computeCleanCollisionGrid(
+          pixels,
+          rawW,
+          rawH,
+          fullRawH,
+          def,
+          cols,
+          rows,
+          southGateOpen,
+          northGateOpen
+        );
+        return { blockedGrid, cellTypeGrid };
+      })(),
       obstacleZones: [],
       pixels,
       rawW,
@@ -941,66 +930,119 @@ export class MapManager {
     const exitCol = Math.floor(m.cols * m.def.northExitNormX);
     for (let r = 0; r < Math.min(16, m.rows); r++) {
       for (let c = exitCol - 3; c <= exitCol + 3; c++) {
-        if (c >= 1 && c < m.cols - 1) m.blockedGrid[r][c] = false;
+        if (c >= 1 && c < m.cols - 1) { m.blockedGrid[r][c] = false; m.cellTypeGrid[r][c] = 'walkable'; }
       }
     }
     this.destroyMapObstacles(m);
     this.buildStaticZonesForMap(m);
   }
 
-  private computeCleanCollisionGrid(
+    private computeCleanCollisionGrid(
     data: Uint8ClampedArray,
     rawW: number,
     rawH: number,
-    fullRawH: number,
+    _fullRawH: number,
     def: MapDefinition,
     cols: number,
     rows: number,
     openSouthEntrance: boolean,
     openNorthExit: boolean
-  ): boolean[][] {
-    // Caso especial: Arena Final do Boss Onix (map5-BOSS)
-    // Trava o jogador e o Onix estritamente dentro da quadra central da Pokébola!
+  ): { blockedGrid: boolean[][]; cellTypeGrid: MapCellType[][] } {
+    const layout = MAP_LAYOUTS[def.key];
+    const isDeterministic = layout?.deterministic === true;
+    const solidBoxes = layout?.solidBoxes ?? [];
+    const waterZones = layout?.waterZones ?? [];
+    const bridgeZones = layout?.bridgeZones ?? [];
+    const boundaryBoxes = layout?.boundaryBoxes ?? [];
+    const walkableZones = layout?.walkableZones ?? [];
+
+    const isInsideBox = (normX: number, normY: number, box: NormalizedBox) =>
+      normX >= box.x0 && normX <= box.x1 && normY >= box.y0 && normY <= box.y1;
+
     if (def.theme === 'boss') {
-      return Array.from({ length: rows }, (_, r) =>
+      const cellTypeGrid: MapCellType[][] = Array.from({ length: rows }, (_, r) =>
         Array.from({ length: cols }, (__, c) => {
+          if (c <= 1 || c >= cols - 2 || r <= 1 || r >= rows - 2) {
+            return 'boundary';
+          }
           const normX = ((c + 0.5) * RAW_CELL_SIZE) / rawW;
           const normY = ((r + 0.5) * RAW_CELL_SIZE) / rawH;
-          const insideArena =
-            normX >= 0.145 &&
-            normX <= 0.855 &&
-            normY >= 0.345 &&
-            normY <= 0.785;
-          return !insideArena;
+          for (const box of solidBoxes) {
+            if (isInsideBox(normX, normY, box)) return 'building';
+          }
+          for (const bnd of boundaryBoxes) {
+            if (isInsideBox(normX, normY, bnd)) return 'boundary';
+          }
+          if (walkableZones.length > 0) {
+            for (const walk of walkableZones) {
+              if (isInsideBox(normX, normY, walk)) return 'walkable';
+            }
+            return 'boundary';
+          }
+          const dx = normX - 0.5;
+          const dy = (normY - 0.5) * 1.5;
+          const insideArena = dx * dx + dy * dy <= 0.38 * 0.38;
+          return insideArena ? 'walkable' : 'boundary';
         })
       );
+      const blockedGrid = cellTypeGrid.map((row) => row.map((cell) => cell !== 'walkable'));
+      return { blockedGrid, cellTypeGrid };
     }
 
-    const solidBoxes = MAP_SOLID_BOXES[def.key] ?? [];
-
-    const grid: boolean[][] = Array.from({ length: rows }, (_, r) =>
+    const cellTypeGrid: MapCellType[][] = Array.from({ length: rows }, (_, r) =>
       Array.from({ length: cols }, (__, c) => {
-        // Bordas externas do mapa sempre bloqueadas (exceto quando o portão abre)
-        if (c <= 0 || c >= cols - 1) return true;
-        if (r <= 0 && !openNorthExit) return true;
-        if (r >= rows - 1 && !openSouthEntrance) return true;
+        if (c <= 0 || c >= cols - 1) return 'boundary';
+        if (r <= 0 && !openNorthExit) return 'boundary';
+        if (r >= rows - 1 && !openSouthEntrance) return 'boundary';
 
         const normX = ((c + 0.5) * RAW_CELL_SIZE) / rawW;
-        const normYFull = ((r + 0.5) * RAW_CELL_SIZE) / fullRawH;
+        const normY = ((r + 0.5) * RAW_CELL_SIZE) / rawH;
 
-        // Verifica footprints explícitos de casas, prédios, ginásios e cercas
-        for (const box of solidBoxes) {
-          if (
-            normX >= box.x0 &&
-            normX <= box.x1 &&
-            normYFull >= box.y0 &&
-            normYFull <= box.y1
-          ) {
-            return true;
+        // 1. Pontes, píeres e escadas registradas são 100% livres para caminhar (SEM bodyblock)
+        for (const bridge of bridgeZones) {
+          if (isInsideBox(normX, normY, bridge)) {
+            return 'walkable';
+          }
+        }
+        for (const walk of walkableZones) {
+          if (isInsideBox(normX, normY, walk)) {
+            return 'walkable';
           }
         }
 
-        return this.isRawCellObstacle(
+        // 2. Construções, cercas, estátuas e árvores grandes (bloqueiam terrestres/aquáticos, voadores passam!)
+        for (const box of solidBoxes) {
+          if (isInsideBox(normX, normY, box)) {
+            return 'building';
+          }
+        }
+
+        // 3. Paredes de caverna e falésias íngremes sem escada (bloqueiam todos)
+        for (const bnd of boundaryBoxes) {
+          if (isInsideBox(normX, normY, bnd)) {
+            return 'boundary';
+          }
+        }
+
+        // 4. Lagos, rios e mares (pokémons de água nadam, voadores voam, outros bloqueiam)
+        for (const water of waterZones) {
+          if (isInsideBox(normX, normY, water)) {
+            return 'water';
+          }
+        }
+
+        // 5. Perímetro extremo do mapa (2 tiles de margem externa)
+        if (c <= 1 || c >= cols - 2 || r <= 1 || r >= rows - 2) {
+          return 'boundary';
+        }
+
+        // 6. Se o layout é determinístico (gerado com coordenadas exatas 1:1), todo o restante
+        // (gramas, grama alta, flores, caminhos, praias, piso de caverna) é 100% caminhável!
+        if (isDeterministic) {
+          return 'walkable';
+        }
+
+        return this.classifyRawCell(
           data,
           rawW,
           rawH,
@@ -1011,7 +1053,6 @@ export class MapManager {
       })
     );
 
-    // Garante que a passagem sul e norte da pontezinha estejam limpas
     const southCol = Math.floor(cols * def.southEntranceNormX);
     const northCol = Math.floor(cols * def.northExitNormX);
     const halfSpan = 3;
@@ -1019,38 +1060,42 @@ export class MapManager {
     const southEnd = openSouthEntrance ? rows - 1 : rows - 2;
     for (let r = Math.max(0, rows - 15); r <= southEnd; r++) {
       for (let c = southCol - halfSpan; c <= southCol + halfSpan; c++) {
-        if (c >= 1 && c < cols - 1) grid[r][c] = false;
+        if (c >= 1 && c < cols - 1) cellTypeGrid[r][c] = 'walkable';
       }
     }
 
     const northStart = openNorthExit ? 0 : 2;
     for (let r = northStart; r < Math.min(rows, 15); r++) {
       for (let c = northCol - halfSpan; c <= northCol + halfSpan; c++) {
-        if (c >= 1 && c < cols - 1) grid[r][c] = false;
+        if (c >= 1 && c < cols - 1) cellTypeGrid[r][c] = 'walkable';
       }
     }
 
-    return grid;
+    const blockedGrid = cellTypeGrid.map((row) => row.map((cell) => cell !== 'walkable'));
+    return { blockedGrid, cellTypeGrid };
   }
 
   /**
-   * Detecção precisa de obstáculos por amostragem de pixels:
-   * Árvores densas, construções (telhados/paredes), cercas, falésias e rios bloqueiam,
-   * enquanto grama baixa, grama alta (matinhos escuros), caminhos de areia e calçadas
-   * são 100% livres para caminhar e NUNCA bloqueiam o jogador ou inimigos.
+   * Detecção pr  /**
+   * Detecção precisa e revisada de células do mapa:
+   * - Gramas de todos os tons, flores de qualquer cor, caminhos (terra, areia, cascalho, calçadas)
+   *   e escadas (madeira, pedra de falésia) são 100% LIVRES para caminhar (SEM blockguard)!
+   * - Árvores grandes (apenas copas/troncos densos) e construções possuem bodyblock para pokémons terrestres,
+   *   mas pokémons voadores voam livremente por cima.
+   * - Rios e lagos: pokémons do tipo água nadam (com animação), voadores voam, outros bloqueiam.
+   * - Penhascos verticais e bordas extremas: boundary (bloqueia todos).
    */
-  private isRawCellObstacle(
+  private classifyRawCell(
     data: Uint8ClampedArray,
     imgW: number,
     imgH: number,
     startX: number,
     startY: number,
     theme: 'forest' | 'cave' | 'boss'
-  ): boolean {
+  ): MapCellType {
     let water = 0;
     let tree = 0;
     let building = 0;
-    let fence = 0;
     let rock = 0;
     let walkable = 0;
     let total = 0;
@@ -1067,173 +1112,180 @@ export class MapManager {
         total++;
 
         // 1. Rios, lagos e corpos d'água (azul claramente predominante)
-        if (b > r + 30 && b > g + 10 && b >= 115 && r < 130) {
+        if (b > r + 35 && b > g + 15 && b >= 125) {
           water++;
           continue;
         }
 
         // 2. Tema de Caverna (map6, map7)
         if (theme === 'cave') {
-          const isSand =
-            r > 175 && g > 160 && b > 90 && Math.abs(r - g) < 32;
           const isCaveFloor =
-            r >= 110 &&
-            r <= 190 &&
-            g >= 118 &&
-            g <= 198 &&
-            b >= 88 &&
-            b <= 168 &&
-            g >= r - 16;
-          const isMoss = g > r + 12 && g > b + 8;
-          if (isSand || isCaveFloor || isMoss) {
+            (r >= 95 && g >= 90 && b >= 65 && Math.abs(r - g) <= 40) ||
+            (r >= 155 && g >= 140 && b >= 75) ||
+            (g > r + 8 && g > b + 6);
+          const isCaveStair =
+            r >= 105 && r <= 195 && g >= 95 && g <= 180 && b <= 145;
+
+          if (isCaveFloor || isCaveStair) {
             walkable++;
             continue;
           }
-          if (
-            (r > g + 14 && r > b + 16 && r > 95) ||
-            (r < 110 && g < 92 && b < 92)
-          ) {
+          if (r < 100 && g < 85 && b < 85) {
             rock++;
+            continue;
           }
-          continue;
         }
 
-        // 3. TERRENOS CAMINHO / GRAMA (100% LIVRES):
-        // Grama (baixa ou alta): verde é o canal dominante sobre vermelho e azul
-        const isGrass =
-          g >= 68 &&
-          g >= r + 10 &&
-          g >= b - 12 &&
-          r <= 160 &&
-          b <= 175;
-
-        // Estrada de areia / terra amarelada
-        const isDirtRoad =
-          r >= 170 &&
-          g >= 145 &&
-          b >= 80 &&
-          b <= 190 &&
-          r >= g - 12 &&
-          r - g <= 46 &&
-          g > b + 18;
-
-        // Caminhos e calçadas de pedra clara (map1, map2, map4)
-        const isWhiteRoad =
-          r >= 165 &&
-          g >= 165 &&
-          b >= 165 &&
-          Math.abs(r - g) <= 28 &&
-          Math.abs(g - b) <= 30;
-
-        // Flores coloridas no chão
+        // 3. FLORES DE TODAS AS CORES (vermelhas, amarelas, azuis, rosas, brancas)
+        // Devem ser 100% livres para caminhar (SEM blockguard)
         const isFlower =
-          r > 180 && g >= 55 && g <= 165 && b >= 35 && b <= 135;
+          (r > 155 && r > g + 18) || // Vermelha / magenta / rosa
+          (r > 165 && g > 140 && b < 130) || // Amarela / alaranjada
+          (b > 155 && b > r + 25) || // Azul / ciano / lilás
+          (r > 195 && g > 195 && b > 185); // Branca / creme claro
 
-        if (isGrass || isDirtRoad || isWhiteRoad || isFlower) {
+        if (isFlower) {
           walkable++;
           continue;
         }
 
-        // 4. Copas de árvores reais (destaque amarelado muito brilhante ou tronco marrom)
-        const isTreeCrownDome =
-          g >= 142 && r >= 95 && b <= 78 && g - b >= 62 && r > b + 18;
-        const isTreeTrunk =
-          r >= 78 &&
-          r <= 155 &&
-          g >= 40 &&
-          g <= 98 &&
-          b >= 20 &&
-          b <= 68 &&
-          r > g + 18;
-        const isTreeShadowPitch = r < 45 && g < 60 && b < 42;
+        // 4. GRAMAS DE TODOS OS TONS (grama baixa, média, grama alta e matinhos)
+        // Devem ser 100% livres para caminhar (SEM blockguard)
+        const isGrass =
+          (g >= 135 && (r >= 45 || b >= 85)) ||
+          (g >= 110 && g >= r + 15 && g >= b - 10 && (r >= 45 || b >= 75)) ||
+          (g >= 140 && g >= r - 10 && g >= b - 10);
 
-        if (isTreeCrownDome || isTreeTrunk || isTreeShadowPitch) {
+        if (isGrass) {
+          walkable++;
+          continue;
+        }
+
+        // 5. CAMINHOS E ESTRADAS (terra batida, areia, cascalho, calçadas de pedra)
+        // Devem ser 100% livres para caminhar (SEM blockguard)
+        const isDirtRoad =
+          r >= 135 &&
+          g >= 115 &&
+          b >= 60 &&
+          r >= g - 20 &&
+          r - g <= 55 &&
+          g > b + 10;
+
+        const isCityRoad =
+          r >= 140 &&
+          g >= 140 &&
+          b >= 140 &&
+          Math.abs(r - g) <= 35 &&
+          Math.abs(g - b) <= 35;
+
+        if (isDirtRoad || isCityRoad) {
+          walkable++;
+          continue;
+        }
+
+        // 6. ESCADAS E DEGRAUS (madeira, pedra esculpida em falésias)
+        // Devem ser 100% livres para caminhar (SEM blockguard)
+        const isWoodStair =
+          r >= 125 &&
+          r <= 220 &&
+          g >= 80 &&
+          g <= 180 &&
+          b >= 35 &&
+          b <= 135 &&
+          r > g + 12;
+
+        const isStoneStair =
+          r >= 85 &&
+          r <= 180 &&
+          g >= 80 &&
+          g <= 175 &&
+          b >= 70 &&
+          b <= 170 &&
+          Math.abs(r - g) <= 22 &&
+          Math.abs(g - b) <= 25;
+
+        if (isWoodStair || isStoneStair) {
+          walkable++;
+          continue;
+        }
+
+        // 7. ÁRVORES GRANDES (apenas o miolo/tronco de árvores grandes maciças)
+        // Bloqueiam pokémons terrestres, mas pokémons voadores passam por cima!
+        const isTreeCanopy =
+          r <= 42 && g <= 145 && b <= 80 && g >= r + 25 && g >= b + 10;
+        const isTreeTrunk =
+          r >= 60 && r <= 145 && g >= 25 && g <= 85 && b <= 55 && r > g + 25;
+        const isTreeShadow = r <= 38 && g <= 50 && b <= 38;
+
+        if (isTreeCanopy || isTreeTrunk || isTreeShadow) {
           tree++;
           continue;
         }
 
-        // 5. Cercas e placas de madeira
-        if (
-          r >= 115 &&
-          r <= 195 &&
-          g >= 65 &&
-          g <= 138 &&
-          b >= 40 &&
-          b <= 108 &&
-          r > g + 24 &&
-          g >= b
-        ) {
-          fence++;
+        // 8. Telhados de casas e construções (voadores passam por cima, terrestres bloqueiam)
+        const isRedRoof = r > 165 && g < 95 && b < 95;
+        const isBlueRoof = b > 160 && r < 100 && g < 150;
+        if (isRedRoof || isBlueRoof) {
+          building++;
           continue;
         }
 
-        // 6. Paredes rochosas, falésias marrons e pedras cinzas
-        const isBrownCliff =
-          r > g + 18 && g > b + 10 && r >= 95 && r <= 215 && b < 125;
-        const isGreyRock =
-          r >= 85 &&
-          r <= 155 &&
-          g >= 85 &&
-          g <= 155 &&
-          b >= 85 &&
-          b <= 160 &&
-          Math.abs(r - g) <= 12 &&
-          Math.abs(g - b) <= 12;
-        if (isBrownCliff || isGreyRock) {
+        // 9. Paredes rochosas verticais e penhascos intransponíveis
+        const isCliff =
+          r > g + 22 && g > b + 12 && r >= 95 && r <= 220 && b < 105;
+        if (isCliff) {
           rock++;
           continue;
-        }
-
-        // 7. Telhados e paredes de prédios (caso não estejam nas bounding boxes)
-        const isRoof =
-          (r > 165 && g < 100 && b < 100) ||
-          (b > 145 && r < 118 && g < 172) ||
-          (r > 160 && g > 118 && g < 175 && b < 95);
-        if (isRoof) {
-          building++;
         }
       }
     }
 
-    if (total === 0) return false;
+    if (total === 0) return 'walkable';
 
-    // Se pelo menos 32% da célula for chão caminhável (grama, terra, calçada),
-    // a célula NÃO é um obstáculo fechado (permite passagem suave por trilhas e gramados)
     const walkableRatio = walkable / total;
     const waterRatio = water / total;
-    const fenceRatio = fence / total;
-    const rockRatio = rock / total;
     const treeRatio = tree / total;
     const buildingRatio = building / total;
+    const rockRatio = rock / total;
 
-    if (theme === 'cave') {
-      return waterRatio >= 0.25 || rockRatio >= 0.38;
+    // 1. Regra prioritária de fluidez: Se há pelo menos 20% de área caminhável
+    // (grama, flor, caminho ou escada), a célula é 100% LIVRE (walkable) e NUNCA gera blockguard!
+    if (walkableRatio >= 0.20) {
+      return 'walkable';
     }
 
-    // Água e cercas sempre bloqueiam se tiverem presença relevante
-    if (waterRatio >= 0.26) return true;
-    if (fenceRatio >= 0.28) return true;
-    if (rockRatio >= 0.36) return true;
-
-    // Se tem grama/caminho suficiente, NUNCA bloqueia
-    if (walkableRatio >= 0.30) {
-      return false;
+    // 2. Corpos d'água (pokémons de água nadam, voadores voam, outros bloqueiam)
+    if (waterRatio >= 0.35) {
+      return 'water';
     }
 
-    // Caso contrário, bloqueia se a maioria da célula for árvore ou prédio
-    return treeRatio >= 0.45 || buildingRatio >= 0.35;
+    // 3. Árvores grandes e construções sólidas (voadores voam por cima, terrestres têm bodyblock)
+    if (treeRatio >= 0.45 || buildingRatio >= 0.35) {
+      return 'building';
+    }
+
+    // 4. Falésias verticais intransponíveis e paredes de caverna (boundary: bloqueia todos)
+    if (rockRatio >= 0.45) {
+      return 'boundary';
+    }
+
+    // 5. Padrão seguro para áreas abertas
+    return 'walkable';
   }
 
   private buildStaticZonesForMap(m: ActiveMapInstance): void {
     for (let r = 0; r < m.rows; r++) {
       let c = 0;
       while (c < m.cols) {
-        if (!m.blockedGrid[r][c]) {
+        const type = m.cellTypeGrid[r][c];
+        if (type === 'walkable') {
           c++;
           continue;
         }
         const startCol = c;
-        while (c < m.cols && m.blockedGrid[r][c]) c++;
+        while (c < m.cols && m.cellTypeGrid[r][c] === type) {
+          c++;
+        }
         const w = (c - startCol) * m.cellSize;
         const zone = this.scene.add.zone(
           m.x + startCol * m.cellSize + w / 2,
@@ -1241,6 +1293,7 @@ export class MapManager {
           w,
           m.cellSize
         );
+        zone.setData('obstacleType', type);
         this.scene.physics.add.existing(zone, true);
         this.obstacleGroup.add(zone);
         m.obstacleZones.push(zone);

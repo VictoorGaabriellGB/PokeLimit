@@ -6,8 +6,11 @@ import {
 } from '../config/abilities';
 import { GAME_SETTINGS } from '../config/gameConfig';
 import {
-  BOSS_ID,
+  BOSS_GEODUDE_ID,
+  BOSS_ONIX_ID,
   ENEMY_IDS,
+  MAP_MINIBOSS_CONFIGS,
+  MAP_SEQUENCE,
   MAX_PLAYER_LEVEL,
 } from '../config/pokemonManifest';
 import { Enemy } from '../entities/Enemy';
@@ -63,6 +66,12 @@ export class GameScene extends Phaser.Scene {
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private processedDeaths = new WeakSet<Enemy>();
 
+  private currentMiniboss: Enemy | null = null;
+  private minibossSpawned = false;
+  private minibossDefeated = false;
+  private minibossKillsInMap = 0;
+
+  private bossPhase: 1 | 2 = 1;
   private bossEnemy: Enemy | null = null;
   private bossEncounterStarted = false;
   private bossDefeated = false;
@@ -115,14 +124,26 @@ export class GameScene extends Phaser.Scene {
   private mapSubStatusText!: Phaser.GameObjects.Text;
   private rightStatsText!: Phaser.GameObjects.Text;
   private bannerContainer!: Phaser.GameObjects.Container;
-  private bannerBg!: Phaser.GameObjects.Rectangle;
+  private bannerGfx!: Phaser.GameObjects.Graphics;
   private bannerText!: Phaser.GameObjects.Text;
   private compassText!: Phaser.GameObjects.Text;
 
-  // HUD da Barra de Vida do Boss Onix
+  // HUD da Barra de Vida do Boss / Miniboss com Mini Foto (igual ao jogador)
   private bossHudContainer!: Phaser.GameObjects.Container;
+  private bossPortraitFrame!: Phaser.GameObjects.Rectangle;
+  private bossPortraitImg!: Phaser.GameObjects.Image;
+  private bossBadgeBg!: Phaser.GameObjects.Rectangle;
+  private bossBadgeText!: Phaser.GameObjects.Text;
+  private bossBarBg!: Phaser.GameObjects.Rectangle;
   private bossHpBarFill!: Phaser.GameObjects.Rectangle;
+  private bossBarShine!: Phaser.GameObjects.Rectangle;
   private bossHpText!: Phaser.GameObjects.Text;
+
+  // Referências para botões interativos de Pausa & HUD
+  private pauseBtnBg: Phaser.GameObjects.Rectangle | null = null;
+  private pauseResumeBtnBg: Phaser.GameObjects.Rectangle | null = null;
+  private pauseRestartBtnBg: Phaser.GameObjects.Rectangle | null = null;
+  private pauseMenuBtnBg: Phaser.GameObjects.Rectangle | null = null;
 
   // Controle de Modal & Seleção em 2 Etapas (Selecionar -> Confirmar)
   private modalContainer: Phaser.GameObjects.Container | null = null;
@@ -143,6 +164,11 @@ export class GameScene extends Phaser.Scene {
     this.enemies = [];
     this.xpOrbs = [];
     this.processedDeaths = new WeakSet<Enemy>();
+    this.currentMiniboss = null;
+    this.minibossSpawned = false;
+    this.minibossDefeated = false;
+    this.minibossKillsInMap = 0;
+    this.bossPhase = 1;
     this.bossEnemy = null;
     this.bossEncounterStarted = false;
     this.bossDefeated = false;
@@ -182,13 +208,48 @@ export class GameScene extends Phaser.Scene {
     );
 
     this.enemyGroup = this.physics.add.group();
+
+    // Colisão do Jogador com o Cenário:
+    // - Pokémons de Água (Squirtle/Wartortle/Blastoise) podem entrar nos lagos e nadar!
+    // - Pokémons Voadores (Charizard) podem voar livremente sobre lagos e casas!
+    // - Demais tipos de Pokémon são rigorosamente bloqueados por lagos e casas!
     this.physics.add.collider(
       this.player.sprite,
-      this.mapManager.getObstaclesGroup()
+      this.mapManager.getObstaclesGroup(),
+      undefined,
+      (_playerObj, zoneObj) => {
+        const type = (zoneObj as Phaser.GameObjects.Zone).getData('obstacleType');
+        if (type === 'water') {
+          if (this.player.canSwim() || this.player.canFly()) return false;
+          return true;
+        }
+        if (type === 'building') {
+          if (this.player.canFly()) return false;
+          return true;
+        }
+        return true;
+      }
     );
+
+    // Colisão dos Inimigos com o Cenário:
+    // - Inimigos Voadores (Zubat) podem passar sobre lagos e casas!
+    // - Inimigos Terrestres (Rattata, Onix) são bloqueados por lagos e casas!
     this.physics.add.collider(
       this.enemyGroup,
-      this.mapManager.getObstaclesGroup()
+      this.mapManager.getObstaclesGroup(),
+      undefined,
+      (enemySpriteObj, zoneObj) => {
+        const enemy = (enemySpriteObj as any).enemyRef as Enemy;
+        const isFlying = enemy ? enemy.canFly() : false;
+        const isSwimmer = enemy ? enemy.canSwim() : false;
+        const type = (zoneObj as Phaser.GameObjects.Zone).getData('obstacleType');
+        if (isFlying) {
+          if (type === 'water' || type === 'building') return false;
+        } else if (isSwimmer && type === 'water') {
+          return false;
+        }
+        return true;
+      }
     );
     this.physics.add.collider(this.enemyGroup, this.enemyGroup);
 
@@ -200,6 +261,7 @@ export class GameScene extends Phaser.Scene {
 
     this.setupShortcuts();
     this.createHud();
+    this.setupScreenPointerHandler();
     this.showBanner(`📍 ${this.mapManager.getCurrentMapDefinition().name}`);
   }
 
@@ -217,6 +279,7 @@ export class GameScene extends Phaser.Scene {
 
     const dtSeconds = delta / 1000;
     this.runTimeSeconds += dtSeconds;
+    this.mapManager.update(delta);
 
     const actions = this.player.update(delta);
     if (actions.specialUsed) {
@@ -228,52 +291,81 @@ export class GameScene extends Phaser.Scene {
       );
     }
 
-    const px = this.player.sprite.x;
+        const px = this.player.sprite.x;
     const py = this.player.sprite.y;
 
-    // 1. Tempo do mapa e transição conectada com pontezinha
+    // Atualiza estado de nado exclusivo para Pokémons aquáticos
+    if (this.player.canSwim()) {
+      const inWater = this.mapManager.isWaterAt(px, py);
+      this.player.setSwimming(inWater);
+    }
+
+    // 1. Tempo do mapa, Miniboss e transição conectada com pontezinha
     if (!this.mapManager.isBossMapActive()) {
-      if (!this.mapManager.isNextMapGateOpen()) {
+      // Condição de Miniboss: surge aos 24s de exploração OU após 14 abates no mapa
+      if (!this.minibossSpawned) {
         this.mapElapsedSeconds += dtSeconds;
-        if (this.mapElapsedSeconds >= GAME_SETTINGS.MAP_DURATION_SECONDS) {
-          this.openNextMapPassage();
+        if (this.mapElapsedSeconds >= 24 || this.minibossKillsInMap >= 14) {
+          this.minibossSpawned = true;
+          this.spawnCurrentMapMiniboss();
         }
-        this.compassText.setVisible(false);
-      } else {
+      }
+
+      // A passagem só é aberta e apontada pela bússola após derrotar o Miniboss do mapa
+      if (this.minibossDefeated && this.mapManager.isNextMapGateOpen()) {
         const enteredMapDef = this.mapManager.checkPlayerEnteredNextMap(px, py);
         if (enteredMapDef) {
           this.onPlayerCompletedMapTransition(enteredMapDef.name);
         } else {
           this.updateCompassIndicator(px, py);
         }
+      } else {
+        this.compassText.setVisible(false);
       }
     } else {
       this.compassText.setVisible(false);
     }
 
-    // 2. Spawner de Horda Survivor (Ritmo, densidade e lotes inspirados na referência)
+    // 2. Spawner de inimigos
     this.spawnTimerMs += delta;
     const isBossActive = Boolean(this.bossEnemy && !this.bossEnemy.isDead);
     const maxEnemies = isBossActive
-      ? 6
-      : Math.min(65, 24 + Math.floor(this.runTimeSeconds / 20) * 4);
-
-    const baseInterval = Math.max(380, 1500 - Math.floor(this.runTimeSeconds * 8));
-    const spawnInterval = isBossActive ? 4800 : baseInterval;
+      ? 5
+      : Math.min(26, 16 + Math.floor(this.runTimeSeconds / 30) * 2);
+    const spawnInterval = isBossActive ? 5200 : 2000;
 
     if (this.spawnTimerMs >= spawnInterval && this.enemies.length < maxEnemies) {
       this.spawnTimerMs = 0;
-      const batchCount = isBossActive
-        ? 1
-        : Math.min(5, 1 + Math.floor(this.runTimeSeconds / 25));
-      for (let b = 0; b < batchCount && this.enemies.length < maxEnemies; b++) {
-        this.spawnWildPokemon();
-      }
+      this.spawnWildPokemon();
     }
 
-    // 3. Atualiza inimigos e verifica investidas/danos
+    // 3. Atualiza inimigos e verifica dano de contato (acionando passivas inatas de contato!)
     this.enemies = this.enemies.filter((enemy) => {
       if (enemy.isDead) return false;
+
+      const distToPlayer = Phaser.Math.Distance.Between(
+        px,
+        py,
+        enemy.sprite.x,
+        enemy.sprite.y
+      );
+
+      // Despawn por distância: inimigos comuns somem se ficarem muito distantes (>640px)
+      const DESPAWN_DISTANCE = 640;
+      if (!enemy.isBoss && !enemy.isMiniboss && distToPlayer > DESPAWN_DISTANCE) {
+        enemy.destroy();
+        this.spawnWildPokemon();
+        return false;
+      }
+
+      // Miniboss persegue ativamente o jogador se ficar longe (>750px)
+      if (enemy.isMiniboss && distToPlayer > 750) {
+        const repAngle = Phaser.Math.Angle.Between(px, py, enemy.sprite.x, enemy.sprite.y);
+        const repX = px + Math.cos(repAngle) * 320;
+        const repY = py + Math.sin(repAngle) * 320;
+        const safePos = this.mapManager.findNearestWalkablePosition(repX, repY);
+        enemy.sprite.setPosition(safePos.x, safePos.y);
+      }
 
       enemy.update(
         delta,
@@ -315,7 +407,7 @@ export class GameScene extends Phaser.Scene {
         }
       );
 
-      if (!enemy.isDead && !enemy.isIncapacitated() && !enemy.isSleeping) {
+      if (!enemy.isDead && !enemy.isIncapacitated()) {
         const distToPlayer = Phaser.Math.Distance.Between(
           px,
           py,
@@ -324,7 +416,7 @@ export class GameScene extends Phaser.Scene {
         );
         if (distToPlayer <= enemy.getContactRadius()) {
           const contactDmg = enemy.isBoss
-            ? (enemy.isCharging ? 45 : 22)
+            ? 22
             : 8 + this.mapManager.mapsCleared * 2;
           this.player.receiveDamage(contactDmg, enemy);
         }
@@ -369,7 +461,8 @@ export class GameScene extends Phaser.Scene {
     if (this.pendingAbilityPicks > 0 && !this.isModalOpen) {
       this.openAbilityChoiceModal();
     } else if (
-      this.player.level >= MAX_PLAYER_LEVEL &&
+      (this.player.level >= MAX_PLAYER_LEVEL ||
+        this.mapManager.mapsCleared >= MAP_SEQUENCE.length) &&
       !this.bossEncounterStarted &&
       !this.isModalOpen
     ) {
@@ -390,10 +483,77 @@ export class GameScene extends Phaser.Scene {
     // Carga dual da ultimate (+3.33% por abate comum, +50% por chefe) & proc de morte
     this.player.onEnemyKilled(enemy);
 
+    // 1. Chefes da Arena Final (Fase 1: Geodude -> Fase 2: Onix)
     if (enemy.isBoss) {
-      this.onBossDefeated();
+      if (this.bossPhase === 1) {
+        // Geodude derrotado! Dropa 10 orbes dourados de XP e inicia o tremor de terra
+        for (let i = 0; i < 10; i++) {
+          const ox = x + Phaser.Math.Between(-40, 40);
+          const oy = y + Phaser.Math.Between(-40, 40);
+          const orbGfx = this.add
+            .circle(ox, oy, 8, 0xffd700, 1)
+            .setStrokeStyle(2.5, 0xfffbeb, 1)
+            .setDepth(DEPTH.XP_ORB);
+          this.xpOrbs.push({
+            gfx: orbGfx,
+            x: ox,
+            y: oy,
+            xpAmount: 22,
+            isGolden: true,
+            ageMs: 0,
+          });
+        }
+
+        this.bossEnemy = null;
+        this.cameras.main.shake(650, 0.012);
+        this.cameras.main.flash(450, 255, 230, 120);
+        this.showBanner('💥 GEODUDE DERROTADO! O SOLO ESTÁ RACHANDO... ONIX ESTÁ DESPERTANDO!');
+
+        this.time.delayedCall(2200, () => {
+          if (this.player.isDead) return;
+          this.bossPhase = 2;
+          const { bossSpawn } = this.mapManager.getBossArenaSpawns();
+          this.spawnBossOnix(bossSpawn.x, bossSpawn.y);
+        });
+        return;
+      } else {
+        // Fase 2: Onix derrotado! Vitória definitiva
+        this.onBossDefeated();
+        return;
+      }
+    }
+
+    // 2. Miniboss do Mapa Derrotado: Desbloqueia a ponte para o próximo mapa!
+    if (enemy === this.currentMiniboss || enemy.isMiniboss) {
+      this.minibossDefeated = true;
+      this.currentMiniboss = null;
+
+      // Dropa recompensa substancial de 5 orbes dourados
+      for (let i = 0; i < 5; i++) {
+        const ox = x + Phaser.Math.Between(-32, 32);
+        const oy = y + Phaser.Math.Between(-32, 32);
+        const orbGfx = this.add
+          .circle(ox, oy, 7.5, 0xffd700, 1)
+          .setStrokeStyle(2.5, 0xfffbeb, 1)
+          .setDepth(DEPTH.XP_ORB);
+        this.xpOrbs.push({
+          gfx: orbGfx,
+          x: ox,
+          y: oy,
+          xpAmount: 20,
+          isGolden: true,
+          ageMs: 0,
+        });
+      }
+
+      this.cameras.main.shake(450, 0.008);
+      this.showBanner('🎉 MINIBOSS DERROTADO! A PASSAGEM PARA O PRÓXIMO MAPA FOI DESBLOQUEADA!');
+      this.openNextMapPassage();
       return;
     }
+
+    // 3. Inimigos Comuns: orbes rebalanceados para maior desafio e progressão consistente
+    this.minibossKillsInMap++;
 
     const bountyLvl = this.player.getAbilityLevel('bounty');
     const isGolden = bountyLvl > 0 && Math.random() < bountyLvl * 0.14;
@@ -412,7 +572,7 @@ export class GameScene extends Phaser.Scene {
       gfx: orbGfx,
       x,
       y,
-      xpAmount: isGolden ? 48 : 16,
+      xpAmount: isGolden ? 20 : 7,
       isGolden,
       ageMs: 0,
     });
@@ -463,6 +623,7 @@ export class GameScene extends Phaser.Scene {
   private triggerBossArenaTransition(): void {
     if (this.bossEncounterStarted) return;
     this.bossEncounterStarted = true;
+    this.bossPhase = 1;
 
     this.clearAllActiveEnemiesAndOrbs();
     this.compassText.setVisible(false);
@@ -471,14 +632,15 @@ export class GameScene extends Phaser.Scene {
     this.player.teleportTo(playerSpawn.x, playerSpawn.y);
     this.cameras.main.flash(380, 255, 255, 255);
 
-    this.spawnBossOnix(bossSpawn.x, bossSpawn.y);
+    // Inicia a Fase 1 com o Geodude
+    this.spawnBossGeodude(bossSpawn.x, bossSpawn.y);
   }
 
-  private spawnBossOnix(bossX: number, bossY: number): void {
+  private spawnBossGeodude(bossX: number, bossY: number): void {
     if (this.bossEnemy && !this.bossEnemy.isDead) return;
 
     const hpMultiplier = 1 + (this.player.level - 1) * 0.12;
-    this.bossEnemy = new Enemy(this, bossX, bossY, BOSS_ID, hpMultiplier);
+    this.bossEnemy = new Enemy(this, bossX, bossY, BOSS_GEODUDE_ID, hpMultiplier);
     this.enemies.push(this.bossEnemy);
     this.enemyGroup.add(this.bossEnemy.sprite);
 
@@ -489,7 +651,69 @@ export class GameScene extends Phaser.Scene {
 
     this.cameras.main.shake(420, 0.008);
     this.bossHudContainer.setVisible(true);
-    this.showBanner('👑 ARENA FINAL! DERROTE O BOSS ONIX PARA VENCER!');
+    this.showBanner('⚔️ CHEFE 1/2: GEODUDE DESAFIA VOCÊ! DERROTE-O!');
+  }
+
+  private spawnBossOnix(bossX: number, bossY: number): void {
+    if (this.bossEnemy && !this.bossEnemy.isDead) return;
+
+    const hpMultiplier = 1 + (this.player.level - 1) * 0.15;
+    this.bossEnemy = new Enemy(this, bossX, bossY, BOSS_ONIX_ID, hpMultiplier);
+    this.enemies.push(this.bossEnemy);
+    this.enemyGroup.add(this.bossEnemy.sprite);
+
+    this.player.hp = Math.min(
+      this.player.maxHp,
+      this.player.hp + Math.round(this.player.maxHp * 0.4)
+    );
+
+    this.cameras.main.shake(550, 0.012);
+    this.bossHudContainer.setVisible(true);
+    this.showBanner('👑 CHEFE FINAL 2/2: ONIX GIGANTE DESPERTOU! DERROTE-O PARA VENCER!');
+  }
+
+  private spawnCurrentMapMiniboss(): void {
+    if (this.currentMiniboss && !this.currentMiniboss.isDead) return;
+
+    const currentDef = this.mapManager.getCurrentMapDefinition();
+    const cfg = MAP_MINIBOSS_CONFIGS[currentDef.key] ?? {
+      id: '0123',
+      name: 'Scyther Alfa',
+      title: '🍃 Retalhador da Floresta',
+      element: 'planta',
+    };
+
+    const bounds = this.mapManager.getCurrentMapBounds();
+    const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+    const distance = 250;
+    const rawX = Phaser.Math.Clamp(
+      this.player.sprite.x + Math.cos(angle) * distance,
+      bounds.x + 64,
+      bounds.x + bounds.width - 64
+    );
+    const rawY = Phaser.Math.Clamp(
+      this.player.sprite.y + Math.sin(angle) * distance,
+      bounds.y + 64,
+      bounds.y + bounds.height - 64
+    );
+    const spawnPos = this.mapManager.findNearestWalkablePosition(rawX, rawY);
+
+    const hpMultiplier =
+      (1 + this.mapManager.mapsCleared * 0.35 + (this.player.level - 1) * 0.12) * 1.2;
+
+    this.currentMiniboss = new Enemy(
+      this,
+      spawnPos.x,
+      spawnPos.y,
+      cfg.id,
+      hpMultiplier,
+      true // isMiniboss = true
+    );
+    this.enemies.push(this.currentMiniboss);
+    this.enemyGroup.add(this.currentMiniboss.sprite);
+
+    this.cameras.main.shake(380, 0.007);
+    this.showBanner(`⚠️ MINIBOSS APROXIMANDO-SE: ${cfg.title}! Derrote-o para desbloquear a ponte!`);
   }
 
   private onBossDefeated(): void {
@@ -624,10 +848,10 @@ export class GameScene extends Phaser.Scene {
     const dim = this.add.rectangle(
       0,
       0,
-      GAME_SETTINGS.WIDTH,
-      GAME_SETTINGS.HEIGHT,
+      GAME_SETTINGS.WIDTH * 3,
+      GAME_SETTINGS.HEIGHT * 3,
       0x030712,
-      0.82
+      0.85
     );
 
     const panelGfx = this.add.graphics();
@@ -674,7 +898,7 @@ export class GameScene extends Phaser.Scene {
       textHex: string,
       strokeColor: number,
       onClick: () => void
-    ) => {
+    ): [Phaser.GameObjects.Rectangle, Phaser.GameObjects.Text] => {
       const btnBg = this.add
         .rectangle(
           0,
@@ -711,7 +935,7 @@ export class GameScene extends Phaser.Scene {
 
     const resumeBtn = createOptionBtn(
       -22,
-      '▶️  RETOMAR AO JOGO [ESC / ENTER]',
+      '▶️  RETOMAR AO JOGO [ESC / ENTER / P]',
       '#22c55e',
       '#052e16',
       0x86efac,
@@ -736,6 +960,10 @@ export class GameScene extends Phaser.Scene {
       () => this.returnToMainMenu()
     );
 
+    this.pauseResumeBtnBg = resumeBtn[0];
+    this.pauseRestartBtnBg = restartBtn[0];
+    this.pauseMenuBtnBg = menuBtn[0];
+
     container.add([
       dim,
       panelGfx,
@@ -751,6 +979,10 @@ export class GameScene extends Phaser.Scene {
 
   private resumeFromPauseModal(): void {
     if (this.activeModalType !== 'pause') return;
+    this.pauseResumeBtnBg = null;
+    this.pauseRestartBtnBg = null;
+    this.pauseMenuBtnBg = null;
+    this.input.setDefaultCursor('default');
     if (this.modalContainer) {
       this.modalContainer.destroy();
       this.modalContainer = null;
@@ -762,6 +994,10 @@ export class GameScene extends Phaser.Scene {
 
   private restartRunSamePokemon(): void {
     this.saveCurrentRunIfEligible('abandono');
+    this.pauseResumeBtnBg = null;
+    this.pauseRestartBtnBg = null;
+    this.pauseMenuBtnBg = null;
+    this.input.setDefaultCursor('default');
     if (this.modalContainer) {
       this.modalContainer.destroy();
       this.modalContainer = null;
@@ -1443,6 +1679,10 @@ export class GameScene extends Phaser.Scene {
 
   private onPlayerCompletedMapTransition(newMapName: string): void {
     this.mapElapsedSeconds = 0;
+    this.minibossSpawned = false;
+    this.minibossDefeated = false;
+    this.currentMiniboss = null;
+    this.minibossKillsInMap = 0;
     this.compassText.setVisible(false);
 
     const bounds = this.mapManager.getCurrentMapBounds();
@@ -1527,19 +1767,22 @@ export class GameScene extends Phaser.Scene {
     const kb = this.input.keyboard;
     if (!kb) return;
 
-    kb.on('keydown-ESC', () => {
+    const togglePause = () => {
       if (this.bossDefeated || this.player.isDead) {
-        this.scene.start('MenuScene');
+        this.returnToMainMenu();
       } else if (this.activeModalType === 'pause') {
         this.resumeFromPauseModal();
       } else if (!this.isModalOpen) {
         this.openPauseModal();
       }
-    });
+    };
+
+    kb.on('keydown-ESC', togglePause);
+    kb.on('keydown-P', togglePause);
 
     kb.on('keydown-ENTER', () => {
       if (this.player.isDead || this.bossDefeated) {
-        this.scene.start('MenuScene');
+        this.returnToMainMenu();
       } else if (this.activeModalType === 'pause') {
         this.resumeFromPauseModal();
       } else if (
@@ -1551,7 +1794,9 @@ export class GameScene extends Phaser.Scene {
     });
 
     kb.on('keydown-SPACE', () => {
-      if (
+      if (this.activeModalType === 'pause') {
+        this.resumeFromPauseModal();
+      } else if (
         this.activeModalType === 'ability' &&
         this.selectedModalIndex !== null
       ) {
@@ -1596,7 +1841,11 @@ export class GameScene extends Phaser.Scene {
     });
 
     kb.on('keydown-Q', () => {
-      if (this.activeModalType === 'pause') {
+      if (
+        this.activeModalType === 'pause' ||
+        this.activeModalType === 'gameover' ||
+        this.activeModalType === 'victory'
+      ) {
         this.returnToMainMenu();
       }
     });
@@ -1644,8 +1893,179 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
+
+  /**
+   * Despachante global de cliques e hovers em coordenadas absolutas de tela (1280x720).
+   * Garante 100% de precisão nos cliques do mouse em botões e modais, totalmente imune
+   * a zoom de câmera, deslocamento de scroll e aninhamento de containers.
+   */
+  private setupScreenPointerHandler(): void {
+    // 1. Cliques com o Mouse (PointerDown)
+    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      const px = pointer.x;
+      const py = pointer.y;
+
+      // A) Se o Menu de Pausa estiver aberto:
+      if (this.activeModalType === 'pause') {
+        // Botão 1: Retomar ao Jogo (Y: 310 a 366, X: 420 a 860)
+        if (px >= 420 && px <= 860 && py >= 310 && py <= 366) {
+          this.resumeFromPauseModal();
+          return;
+        }
+        // Botão 2: Reiniciar a Run com o mesmo Pokémon (Y: 374 a 430, X: 420 a 860)
+        if (px >= 420 && px <= 860 && py >= 374 && py <= 430) {
+          this.restartRunSamePokemon();
+          return;
+        }
+        // Botão 3: Voltar ao Menu de Pokémons (Y: 438 a 494, X: 420 a 860)
+        if (px >= 420 && px <= 860 && py >= 438 && py <= 494) {
+          this.returnToMainMenu();
+          return;
+        }
+        return;
+      }
+
+      // B) Se o Modal de Game Over estiver aberto:
+      if (this.activeModalType === 'gameover') {
+        // Reiniciar (Y: 418 a 466, X: 420 a 860)
+        if (px >= 420 && px <= 860 && py >= 418 && py <= 466) {
+          this.restartRunSamePokemon();
+          return;
+        }
+        // Voltar ao Menu (Y: 470 a 520, X: 400 a 880)
+        if (px >= 400 && px <= 880 && py >= 470 && py <= 520) {
+          this.returnToMainMenu();
+          return;
+        }
+        return;
+      }
+
+      // C) Se o Modal de Vitória estiver aberto:
+      if (this.activeModalType === 'victory') {
+        // Voltar ao Menu (Y: 460 a 514, X: 400 a 880)
+        if (px >= 400 && px <= 880 && py >= 460 && py <= 514) {
+          this.returnToMainMenu();
+          return;
+        }
+        return;
+      }
+
+      // D) Se o Modal de Escolha de Habilidade estiver aberto:
+      if (this.activeModalType === 'ability') {
+        // Card 0: X: [180, 480], Y: [190, 474]
+        if (px >= 180 && px <= 480 && py >= 190 && py <= 474) {
+          if (this.currentModalChoices[0]) this.highlightModalAbilityCard(0);
+          return;
+        }
+        // Card 1: X: [490, 790], Y: [190, 474]
+        if (px >= 490 && px <= 790 && py >= 190 && py <= 474) {
+          if (this.currentModalChoices[1]) this.highlightModalAbilityCard(1);
+          return;
+        }
+        // Card 2: X: [800, 1100], Y: [190, 474]
+        if (px >= 800 && px <= 1100 && py >= 190 && py <= 474) {
+          if (this.currentModalChoices[2]) this.highlightModalAbilityCard(2);
+          return;
+        }
+        // Botão de Confirmação (Y: 554 a 614, X: 420 a 860)
+        if (px >= 420 && px <= 860 && py >= 554 && py <= 614) {
+          if (this.selectedModalIndex !== null) this.confirmSelectedModalAbility();
+          return;
+        }
+        return;
+      }
+
+      // E) Jogo em andamento normal:
+      // Botão de Pausa no canto superior direito do HUD (X: 1110 a 1275, Y: 42 a 78)
+      if (!this.isModalOpen && !this.player.isDead && !this.bossDefeated) {
+        if (px >= 1110 && px <= 1275 && py >= 42 && py <= 78) {
+          this.openPauseModal();
+          return;
+        }
+      }
+    });
+
+    // 2. Efeito de Hover e Cursor Dinâmico (PointerMove)
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      const px = pointer.x;
+      const py = pointer.y;
+
+      if (this.activeModalType === 'pause') {
+        const isOverResume = px >= 420 && px <= 860 && py >= 310 && py <= 366;
+        const isOverRestart = px >= 420 && px <= 860 && py >= 374 && py <= 430;
+        const isOverMenu = px >= 420 && px <= 860 && py >= 438 && py <= 494;
+
+        if (this.pauseResumeBtnBg) {
+          this.pauseResumeBtnBg.setStrokeStyle(isOverResume ? 3.5 : 2.5, isOverResume ? 0xffffff : 0x86efac, 1);
+          this.pauseResumeBtnBg.setScale(isOverResume ? 1.02 : 1);
+        }
+        if (this.pauseRestartBtnBg) {
+          this.pauseRestartBtnBg.setStrokeStyle(isOverRestart ? 3.5 : 2.5, isOverRestart ? 0xffffff : 0xbae6fd, 1);
+          this.pauseRestartBtnBg.setScale(isOverRestart ? 1.02 : 1);
+        }
+        if (this.pauseMenuBtnBg) {
+          this.pauseMenuBtnBg.setStrokeStyle(isOverMenu ? 3.5 : 2.5, isOverMenu ? 0xffffff : 0xfde047, 1);
+          this.pauseMenuBtnBg.setScale(isOverMenu ? 1.02 : 1);
+        }
+
+        this.input.setDefaultCursor(isOverResume || isOverRestart || isOverMenu ? 'pointer' : 'default');
+        return;
+      }
+
+      if (this.activeModalType === 'gameover') {
+        const isOverRestart = px >= 420 && px <= 860 && py >= 418 && py <= 466;
+        const isOverMenu = px >= 400 && px <= 880 && py >= 470 && py <= 520;
+        this.input.setDefaultCursor(isOverRestart || isOverMenu ? 'pointer' : 'default');
+        return;
+      }
+
+      if (this.activeModalType === 'victory') {
+        const isOverMenu = px >= 400 && px <= 880 && py >= 460 && py <= 514;
+        this.input.setDefaultCursor(isOverMenu ? 'pointer' : 'default');
+        return;
+      }
+
+      if (this.activeModalType === 'ability') {
+        const isOverCard0 = px >= 180 && px <= 480 && py >= 190 && py <= 474;
+        const isOverCard1 = px >= 490 && px <= 790 && py >= 190 && py <= 474;
+        const isOverCard2 = px >= 800 && px <= 1100 && py >= 190 && py <= 474;
+        const isOverConfirm = px >= 420 && px <= 860 && py >= 554 && py <= 614 && this.selectedModalIndex !== null;
+        this.input.setDefaultCursor(isOverCard0 || isOverCard1 || isOverCard2 || isOverConfirm ? 'pointer' : 'default');
+        return;
+      }
+
+      if (!this.isModalOpen && !this.player.isDead && !this.bossDefeated) {
+        const isOverPause = px >= 1110 && px <= 1275 && py >= 42 && py <= 78;
+        if (this.pauseBtnBg) {
+          if (isOverPause) {
+            this.pauseBtnBg.setFillStyle(0x13233f, 0.98);
+            this.pauseBtnBg.setStrokeStyle(2, 0xffffff, 1);
+            this.input.setDefaultCursor('pointer');
+          } else {
+            this.pauseBtnBg.setFillStyle(0x081326, 0.92);
+            this.pauseBtnBg.setStrokeStyle(1.8, 0xffcb05, 0.95);
+            this.input.setDefaultCursor('default');
+          }
+        }
+        return;
+      }
+
+      this.input.setDefaultCursor('default');
+    });
+  }
+
   private returnToMainMenu(): void {
     this.saveCurrentRunIfEligible('abandono');
+    this.pauseResumeBtnBg = null;
+    this.pauseRestartBtnBg = null;
+    this.pauseMenuBtnBg = null;
+    this.input.setDefaultCursor('default');
+    if (this.modalContainer) {
+      this.modalContainer.destroy();
+      this.modalContainer = null;
+    }
+    this.isModalOpen = false;
+    this.activeModalType = 'none';
     this.scene.start('MenuScene');
   }
 
@@ -1846,59 +2266,76 @@ export class GameScene extends Phaser.Scene {
     // 7. Faixa de Ícones de Passiva Inata + Habilidades Aprendidas abaixo da placa
     this.abilitySlotsContainer = this.add.container(10, 116);
 
-    // 8. Relógio Central + Substatus em placa discreta arredondada
+    // 8. Relógio Central + Substatus em placa ampliada e estilizada (340px)
     const centerHudGfx = this.add.graphics();
-    centerHudGfx.fillStyle(0x000000, 0.32);
-    centerHudGfx.fillRoundedRect(GAME_SETTINGS.WIDTH / 2 - 134, 10, 268, 56, 10);
-    centerHudGfx.fillStyle(0x07101d, 0.76);
-    centerHudGfx.fillRoundedRect(GAME_SETTINGS.WIDTH / 2 - 136, 8, 268, 56, 10);
-    centerHudGfx.lineStyle(1.5, 0x334155, 0.85);
-    centerHudGfx.strokeRoundedRect(GAME_SETTINGS.WIDTH / 2 - 136, 8, 268, 56, 10);
+    centerHudGfx.fillStyle(0x000000, 0.4);
+    centerHudGfx.fillRoundedRect(GAME_SETTINGS.WIDTH / 2 - 172, 10, 344, 58, 12);
+    centerHudGfx.fillStyle(0x081326, 0.92);
+    centerHudGfx.fillRoundedRect(GAME_SETTINGS.WIDTH / 2 - 170, 8, 340, 58, 10);
+    centerHudGfx.fillStyle(0xffffff, 0.05);
+    centerHudGfx.fillRoundedRect(GAME_SETTINGS.WIDTH / 2 - 168, 10, 336, 26, 8);
+    centerHudGfx.lineStyle(1.8, 0x38bdf8, 0.85);
+    centerHudGfx.strokeRoundedRect(GAME_SETTINGS.WIDTH / 2 - 170, 8, 340, 58, 10);
+
+    // Enfeites nos cantos do painel central
+    centerHudGfx.fillStyle(0xffcb05, 0.95);
+    centerHudGfx.fillCircle(GAME_SETTINGS.WIDTH / 2 - 158, 18, 2.5);
+    centerHudGfx.fillCircle(GAME_SETTINGS.WIDTH / 2 + 158, 18, 2.5);
 
     this.centerTimerText = this.add
-      .text(GAME_SETTINGS.WIDTH / 2 - 2, 26, '00:00', {
+      .text(GAME_SETTINGS.WIDTH / 2, 25, '00:00', {
         fontFamily: 'monospace',
-        fontSize: '21px',
+        fontSize: '22px',
         fontStyle: 'bold',
         color: '#ffffff',
         stroke: '#000000',
-        strokeThickness: 3,
+        strokeThickness: 3.5,
       })
       .setOrigin(0.5);
 
     this.mapSubStatusText = this.add
-      .text(GAME_SETTINGS.WIDTH / 2 - 2, 50, '', {
+      .text(GAME_SETTINGS.WIDTH / 2, 49, '', {
         fontFamily: 'monospace',
         fontSize: '11px',
+        fontStyle: 'bold',
         color: '#cbd5e1',
+        stroke: '#000000',
+        strokeThickness: 2,
       })
       .setOrigin(0.5);
 
-    // 9. Contador Superior Direito + Botão Pausar [ESC] em placa discreta
+    // 9. Contador Superior Direito + Botão Pausar [ESC]
     const rightGfx = this.add.graphics();
-    rightGfx.fillStyle(0x000000, 0.32);
-    rightGfx.fillRoundedRect(GAME_SETTINGS.WIDTH - 280, 10, 272, 34, 9);
-    rightGfx.fillStyle(0x07101d, 0.76);
-    rightGfx.fillRoundedRect(GAME_SETTINGS.WIDTH - 282, 8, 272, 34, 9);
-    rightGfx.lineStyle(1.5, 0x334155, 0.85);
-    rightGfx.strokeRoundedRect(GAME_SETTINGS.WIDTH - 282, 8, 272, 34, 9);
+    rightGfx.fillStyle(0x000000, 0.4);
+    rightGfx.fillRoundedRect(GAME_SETTINGS.WIDTH - 296, 10, 288, 36, 10);
+    rightGfx.fillStyle(0x081326, 0.92);
+    rightGfx.fillRoundedRect(GAME_SETTINGS.WIDTH - 298, 8, 288, 36, 10);
+    rightGfx.fillStyle(0xffffff, 0.05);
+    rightGfx.fillRoundedRect(GAME_SETTINGS.WIDTH - 296, 10, 284, 16, 7);
+    rightGfx.lineStyle(1.8, 0x38bdf8, 0.85);
+    rightGfx.strokeRoundedRect(GAME_SETTINGS.WIDTH - 298, 8, 288, 36, 10);
+
+    // Enfeite sutil no canto do painel direito
+    rightGfx.fillStyle(0xffcb05, 0.95);
+    rightGfx.fillCircle(GAME_SETTINGS.WIDTH - 288, 26, 2.5);
 
     this.rightStatsText = this.add
-      .text(GAME_SETTINGS.WIDTH - 22, 25, 'Derrotados: 0   Inimigos: 0', {
+      .text(GAME_SETTINGS.WIDTH - 18, 26, '⚔️ Abates: 0   👾 Inimigos: 0', {
         fontFamily: 'monospace',
-        fontSize: '13.5px',
+        fontSize: '13px',
         fontStyle: 'bold',
         color: '#f8fafc',
+        stroke: '#000000',
+        strokeThickness: 2.5,
       })
       .setOrigin(1, 0.5);
 
-    const pauseBtnBg = this.add
-      .rectangle(GAME_SETTINGS.WIDTH - 72, 56, 124, 24, 0x07101d, 0.82)
-      .setStrokeStyle(1.2, 0xffcb05, 0.75)
-      .setInteractive({ useHandCursor: true });
+    this.pauseBtnBg = this.add
+      .rectangle(GAME_SETTINGS.WIDTH - 82, 60, 144, 28, 0x081326, 0.92)
+      .setStrokeStyle(1.8, 0xffcb05, 0.95);
 
     const pauseBtnTxt = this.add
-      .text(GAME_SETTINGS.WIDTH - 72, 56, '⏸ PAUSAR [ESC]', {
+      .text(GAME_SETTINGS.WIDTH - 82, 60, '⏸ PAUSAR [ESC / P]', {
         fontFamily: 'monospace',
         fontSize: '11px',
         fontStyle: 'bold',
@@ -1906,69 +2343,92 @@ export class GameScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    pauseBtnBg.on('pointerover', () => {
-      pauseBtnBg.setFillStyle(0x13233f, 0.95);
-      pauseBtnBg.setStrokeStyle(1.8, 0xffffff, 1);
-    });
-    pauseBtnBg.on('pointerout', () => {
-      pauseBtnBg.setFillStyle(0x07101d, 0.82);
-      pauseBtnBg.setStrokeStyle(1.2, 0xffcb05, 0.75);
-    });
-    pauseBtnBg.on('pointerdown', () => {
-      if (!this.isModalOpen) this.openPauseModal();
-    });
-
-    // 10. Barra de Vida do Boss Onix
+    // 10. Barra de Vida do Boss / Miniboss com Mini Foto (Estilo PMD igual ao jogador)
     this.bossHudContainer = this.add
-      .container(GAME_SETTINGS.WIDTH / 2, 86)
+      .container(GAME_SETTINGS.WIDTH / 2, 94)
       .setVisible(false);
 
-    const bossBarBg = this.add
-      .rectangle(0, 0, 430, 25, 0x091326, 0.95)
+    // Retrato do Chefe / Miniboss (lado esquerdo da barra)
+    const bossPortraitShadow = this.add.rectangle(-245, 1, 52, 52, 0x000000, 0.48);
+    this.bossPortraitFrame = this.add
+      .rectangle(-246, 0, 48, 48, 0x071120, 0.98)
       .setStrokeStyle(2.5, 0xf59e0b, 1);
 
+    const initBossPortrait = PokemonAnimationManager.getPortraitKey(
+      BOSS_GEODUDE_ID,
+      'Normal'
+    );
+    this.bossPortraitImg = this.add
+      .image(-246, 0, initBossPortrait)
+      .setDisplaySize(42, 42);
+
+    this.bossBadgeBg = this.add
+      .rectangle(-246, 24, 46, 13, 0x071120, 0.98)
+      .setStrokeStyle(1.2, 0xf59e0b, 1);
+
+    this.bossBadgeText = this.add
+      .text(-246, 24, 'CHEFE', {
+        fontFamily: 'monospace',
+        fontSize: '9px',
+        fontStyle: 'bold',
+        color: '#ffcb05',
+      })
+      .setOrigin(0.5);
+
+    // Barra de Vida ao lado do retrato (largura 444px)
+    this.bossBarBg = this.add
+      .rectangle(24, 0, 444, 26, 0x071120, 0.96)
+      .setStrokeStyle(2, 0xf59e0b, 1);
+
     this.bossHpBarFill = this.add
-      .rectangle(-211, 0, 422, 19, 0xdc2626, 1)
+      .rectangle(-194, 0, 436, 20, 0xdc2626, 1)
       .setOrigin(0, 0.5);
 
-    const bossBarShine = this.add
-      .rectangle(-211, -5, 422, 5, 0xffffff, 0.22)
+    this.bossBarShine = this.add
+      .rectangle(-194, -5, 436, 5, 0xffffff, 0.22)
       .setOrigin(0, 0.5);
 
     this.bossHpText = this.add
-      .text(0, 0, '👑 BOSS ONIX', {
+      .text(24, 0, '', {
         fontFamily: 'monospace',
-        fontSize: '13px',
+        fontSize: '12px',
         fontStyle: 'bold',
         color: '#ffffff',
         stroke: '#000000',
-        strokeThickness: 3,
+        strokeThickness: 3.5,
       })
       .setOrigin(0.5);
 
     this.bossHudContainer.add([
-      bossBarBg,
+      bossPortraitShadow,
+      this.bossPortraitFrame,
+      this.bossPortraitImg,
+      this.bossBadgeBg,
+      this.bossBadgeText,
+      this.bossBarBg,
       this.bossHpBarFill,
-      bossBarShine,
+      this.bossBarShine,
       this.bossHpText,
     ]);
 
-    // 11. Banner de avisos elegante
+    // 11. Banner de avisos elegante e dinâmico (auto-redimensionável sem estouro)
     this.bannerContainer = this.add
-      .container(GAME_SETTINGS.WIDTH / 2, 128)
+      .container(GAME_SETTINGS.WIDTH / 2, 134)
       .setAlpha(0);
-    this.bannerBg = this.add
-      .rectangle(0, 0, 420, 32, 0x07101d, 0.92)
-      .setStrokeStyle(1.5, 0xffcb05, 0.9);
+    this.bannerGfx = this.add.graphics();
     this.bannerText = this.add
       .text(0, 0, '', {
         fontFamily: 'monospace',
-        fontSize: '14.5px',
+        fontSize: '13px',
         fontStyle: 'bold',
         color: '#ffcb05',
+        align: 'center',
+        wordWrap: { width: 620, useAdvancedWrap: true },
+        stroke: '#000000',
+        strokeThickness: 3.5,
       })
       .setOrigin(0.5);
-    this.bannerContainer.add([this.bannerBg, this.bannerText]);
+    this.bannerContainer.add([this.bannerGfx, this.bannerText]);
 
     this.hudRoot.add([
       this.hudBackingGfx,
@@ -2000,7 +2460,7 @@ export class GameScene extends Phaser.Scene {
       this.mapSubStatusText,
       rightGfx,
       this.rightStatsText,
-      pauseBtnBg,
+      this.pauseBtnBg,
       pauseBtnTxt,
       this.bossHudContainer,
       this.bannerContainer,
@@ -2233,36 +2693,88 @@ export class GameScene extends Phaser.Scene {
     // 6. Ícones de Passiva Inata & Habilidades
     this.refreshAbilityIconStrip();
 
-    // 7. Relógio Central + Substatus
+    // 7. Relógio Central + Substatus conciso e estilizado (sem overflow)
     this.centerTimerText.setText(RunHistory.formatTime(this.runTimeSeconds));
     if (this.mapManager.isBossMapActive()) {
-      this.mapSubStatusText.setText('👑 Arena Final — Ginásio de Pedra');
-    } else if (this.mapManager.isNextMapGateOpen()) {
-      this.mapSubStatusText.setText('🌉 Ponte aberta ao Norte!');
+      this.mapSubStatusText.setText('👑 ARENA FINAL • DERROTE OS CHEFES');
+      this.mapSubStatusText.setColor('#facc15');
+    } else if (this.currentMiniboss && !this.currentMiniboss.isDead) {
+      this.mapSubStatusText.setText('⚠️ ALERTA: DERROTE O MINIBOSS!');
+      this.mapSubStatusText.setColor('#fb7185');
+    } else if (this.minibossDefeated && this.mapManager.isNextMapGateOpen()) {
+      this.mapSubStatusText.setText('🌉 PONTE DESBLOQUEADA AO NORTE!');
+      this.mapSubStatusText.setColor('#34d399');
     } else {
-      const remaining = Math.max(
-        0,
-        Math.ceil(GAME_SETTINGS.MAP_DURATION_SECONDS - this.mapElapsedSeconds)
-      );
-      this.mapSubStatusText.setText(`${mapDef.name} • ${remaining}s`);
+      const cleanName = mapDef.name.replace(/Mapa \d+ - /, '');
+      this.mapSubStatusText.setText(`🗺️ ${cleanName} • Guardião à espreita`);
+      this.mapSubStatusText.setColor('#94a3b8');
     }
 
     // 8. Contador Superior Direito
     this.rightStatsText.setText(
-      `Derrotados: ${this.defeatedCount}   Inimigos: ${this.enemies.length}`
+      `⚔️ Abates: ${this.defeatedCount}   👾 Inimigos: ${this.enemies.length}`
     );
 
-    // 9. Barra do Boss Onix
+    // 9. Barra de Chefe (Geodude / Onix) ou Miniboss do Mapa com Mini Foto
     if (this.bossEnemy && !this.bossEnemy.isDead) {
       this.bossHudContainer.setVisible(true);
+
+      const isGeodude = this.bossPhase === 1;
+      const bossId = isGeodude ? BOSS_GEODUDE_ID : BOSS_ONIX_ID;
+      const portKey = PokemonAnimationManager.getPortraitKey(bossId, 'Normal');
+      if (this.textures.exists(portKey)) {
+        this.bossPortraitImg.setTexture(portKey);
+      }
+
+      this.bossPortraitFrame.setStrokeStyle(2.5, 0xf59e0b, 1);
+      this.bossBadgeBg.setStrokeStyle(1.2, 0xf59e0b, 1);
+      this.bossBadgeText.setText('CHEFE').setColor('#ffcb05');
+      this.bossBarBg.setStrokeStyle(2, 0xf59e0b, 1);
+      this.bossHpBarFill.setFillStyle(0xd97706);
+
       const bossRatio = Phaser.Math.Clamp(
         this.bossEnemy.hp / Math.max(1, this.bossEnemy.maxHp),
         0,
         1
       );
-      this.bossHpBarFill.width = 422 * bossRatio;
+      this.bossHpBarFill.width = 436 * bossRatio;
+
+      if (isGeodude) {
+        this.bossHpText.setText(
+          `⚔️ CHEFE 1/2: GEODUDE  •  ${Math.ceil(this.bossEnemy.hp)} / ${this.bossEnemy.maxHp} HP`
+        );
+      } else {
+        this.bossHpText.setText(
+          `👑 CHEFE FINAL 2/2: ONIX  •  ${Math.ceil(this.bossEnemy.hp)} / ${this.bossEnemy.maxHp} HP`
+        );
+      }
+    } else if (this.currentMiniboss && !this.currentMiniboss.isDead) {
+      this.bossHudContainer.setVisible(true);
+
+      const curDef = this.mapManager.getCurrentMapDefinition();
+      const cfg = MAP_MINIBOSS_CONFIGS[curDef.key];
+      const miniId = cfg ? cfg.id : '0123';
+      const portKey = PokemonAnimationManager.getPortraitKey(miniId, 'Normal');
+      if (this.textures.exists(portKey)) {
+        this.bossPortraitImg.setTexture(portKey);
+      }
+
+      this.bossPortraitFrame.setStrokeStyle(2.5, 0xf43f5e, 1);
+      this.bossBadgeBg.setStrokeStyle(1.2, 0xf43f5e, 1);
+      this.bossBadgeText.setText('MINIBOSS').setColor('#fb7185');
+      this.bossBarBg.setStrokeStyle(2, 0xf43f5e, 1);
+      this.bossHpBarFill.setFillStyle(0xe11d48);
+
+      const miniRatio = Phaser.Math.Clamp(
+        this.currentMiniboss.hp / Math.max(1, this.currentMiniboss.maxHp),
+        0,
+        1
+      );
+      this.bossHpBarFill.width = 436 * miniRatio;
+
+      const name = cfg ? cfg.name.toUpperCase() : 'MINIBOSS';
       this.bossHpText.setText(
-        `👑 BOSS ONIX — HP: ${Math.ceil(this.bossEnemy.hp)} / ${this.bossEnemy.maxHp}`
+        `⚠️ ${name}  •  ${Math.ceil(this.currentMiniboss.hp)} / ${this.currentMiniboss.maxHp} HP`
       );
     } else {
       this.bossHudContainer.setVisible(false);
@@ -2270,16 +2782,78 @@ export class GameScene extends Phaser.Scene {
   }
 
   private showBanner(message: string): void {
+    let borderColor = 0x38bdf8;
+    let textColor = '#f0f9ff';
+
+    if (message.includes('⚠️') || message.includes('MINIBOSS')) {
+      borderColor = 0xf43f5e;
+      textColor = '#ffe4e6';
+    } else if (
+      message.includes('🎉') ||
+      message.includes('DESBLOQUEADA') ||
+      message.includes('✨')
+    ) {
+      borderColor = 0x10b981;
+      textColor = '#d1fae5';
+    } else if (
+      message.includes('👑') ||
+      message.includes('CHEFE') ||
+      message.includes('💥')
+    ) {
+      borderColor = 0xf59e0b;
+      textColor = '#fef3c7';
+    }
+
     this.bannerText.setText(message);
-    this.bannerBg.width = Math.max(320, this.bannerText.width + 38);
+    this.bannerText.setColor(textColor);
+
+    const padX = 26;
+    const padY = 10;
+    const boxW = Math.max(340, Math.min(680, this.bannerText.width + padX * 2));
+    const boxH = Math.max(40, this.bannerText.height + padY * 2);
+
+    this.bannerGfx.clear();
+    // Sombra inferior
+    this.bannerGfx.fillStyle(0x000000, 0.42);
+    this.bannerGfx.fillRoundedRect(-boxW / 2 + 2, -boxH / 2 + 3, boxW, boxH, 8);
+    // Placa sólida escura translúcida
+    this.bannerGfx.fillStyle(0x071120, 0.94);
+    this.bannerGfx.fillRoundedRect(-boxW / 2, -boxH / 2, boxW, boxH, 8);
+    // Brilho vítreo superior
+    this.bannerGfx.fillStyle(0xffffff, 0.06);
+    this.bannerGfx.fillRoundedRect(
+      -boxW / 2 + 2,
+      -boxH / 2 + 2,
+      boxW - 4,
+      Math.floor(boxH / 2),
+      6
+    );
+    // Borda metálica colorida
+    this.bannerGfx.lineStyle(2, borderColor, 0.95);
+    this.bannerGfx.strokeRoundedRect(-boxW / 2, -boxH / 2, boxW, boxH, 8);
+    // Frisos de canto elegantes
+    this.bannerGfx.fillStyle(borderColor, 0.95);
+    this.bannerGfx.fillCircle(-boxW / 2 + 10, 0, 3);
+    this.bannerGfx.fillCircle(boxW / 2 - 10, 0, 3);
+
     this.tweens.killTweensOf(this.bannerContainer);
-    this.bannerContainer.setAlpha(1);
+    this.bannerContainer.setScale(0.96);
+    this.bannerContainer.setAlpha(0);
+
+    this.tweens.add({
+      targets: this.bannerContainer,
+      scale: 1,
+      alpha: 1,
+      duration: 180,
+      ease: 'Back.easeOut',
+    });
 
     this.tweens.add({
       targets: this.bannerContainer,
       alpha: 0,
-      delay: 2800,
-      duration: 500,
+      delay: 3400,
+      duration: 450,
+      ease: 'Linear',
     });
   }
 }

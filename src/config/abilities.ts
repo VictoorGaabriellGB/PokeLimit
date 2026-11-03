@@ -581,10 +581,10 @@ export const SPECIALS: Record<PokemonAttackProfile['style'], SpecialDefinition> 
       'Torrente contínua de fogo na direção visada que aplica Queimadura Intensa.',
   },
   control_leaf: {
-    name: 'Raio Solar Tóxico',
-    icon: '☀️',
+    name: 'Pó do Sono Supremo',
+    icon: '💤',
     description:
-      'Feixe solar concentrado que atravessa inimigos e aplica Envenenamento Tóxico garantido.',
+      'Nuvem mágica de esporos hipnóticos que Adormece os inimigos por 3 segundos (ficam imóveis) e causa dano.',
   },
   wave_water: {
     name: 'Hidro Vórtice',

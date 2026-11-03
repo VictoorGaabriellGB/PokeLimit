@@ -817,5 +817,348 @@
         ]
       }
     }
+  },
+  "0074": {
+    "id": "0074",
+    "name": "Geodude",
+    "anims": {
+      "Walk": {
+        "file": "assets/sprites/0074/Walk-Anim.png",
+        "frameWidth": 32,
+        "frameHeight": 32,
+        "frameCount": 4,
+        "durations": [
+          8,
+          10,
+          8,
+          10
+        ]
+      },
+      "Attack": {
+        "file": "assets/sprites/0074/Attack-Anim.png",
+        "frameWidth": 72,
+        "frameHeight": 80,
+        "frameCount": 14,
+        "durations": [
+          3,
+          3,
+          2,
+          2,
+          2,
+          2,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          2,
+          2
+        ]
+      },
+      "Idle": {
+        "file": "assets/sprites/0074/Idle-Anim.png",
+        "frameWidth": 32,
+        "frameHeight": 24,
+        "frameCount": 4,
+        "durations": [
+          8,
+          12,
+          8,
+          12
+        ]
+      }
+    }
+  },
+  "0123": {
+    "id": "0123",
+    "name": "Scyther",
+    "anims": {
+      "Walk": {
+        "file": "assets/sprites/0123/Walk-Anim.png",
+        "frameWidth": 40,
+        "frameHeight": 48,
+        "frameCount": 4,
+        "durations": [
+          8,
+          10,
+          8,
+          10
+        ]
+      },
+      "Attack": {
+        "file": "assets/sprites/0123/Attack-Anim.png",
+        "frameWidth": 72,
+        "frameHeight": 80,
+        "frameCount": 10,
+        "durations": [
+          2,
+          4,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      },
+      "Idle": {
+        "file": "assets/sprites/0123/Idle-Anim.png",
+        "frameWidth": 32,
+        "frameHeight": 48,
+        "frameCount": 4,
+        "durations": [
+          40,
+          10,
+          14,
+          10
+        ]
+      }
+    }
+  },
+  "0126": {
+    "id": "0126",
+    "name": "Magmar",
+    "anims": {
+      "Walk": {
+        "file": "assets/sprites/0126/Walk-Anim.png",
+        "frameWidth": 32,
+        "frameHeight": 48,
+        "frameCount": 4,
+        "durations": [
+          8,
+          10,
+          8,
+          10
+        ]
+      },
+      "Attack": {
+        "file": "assets/sprites/0126/Attack-Anim.png",
+        "frameWidth": 72,
+        "frameHeight": 80,
+        "frameCount": 10,
+        "durations": [
+          2,
+          4,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      },
+      "Idle": {
+        "file": "assets/sprites/0126/Idle-Anim.png",
+        "frameWidth": 32,
+        "frameHeight": 48,
+        "frameCount": 4,
+        "durations": [
+          40,
+          6,
+          12,
+          6
+        ]
+      }
+    }
+  },
+  "0062": {
+    "id": "0062",
+    "name": "Poliwrath",
+    "anims": {
+      "Walk": {
+        "file": "assets/sprites/0062/Walk-Anim.png",
+        "frameWidth": 40,
+        "frameHeight": 40,
+        "frameCount": 4,
+        "durations": [
+          8,
+          10,
+          8,
+          10
+        ]
+      },
+      "Attack": {
+        "file": "assets/sprites/0062/Attack-Anim.png",
+        "frameWidth": 72,
+        "frameHeight": 80,
+        "frameCount": 10,
+        "durations": [
+          2,
+          6,
+          1,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      },
+      "Idle": {
+        "file": "assets/sprites/0062/Idle-Anim.png",
+        "frameWidth": 32,
+        "frameHeight": 48,
+        "frameCount": 4,
+        "durations": [
+          40,
+          2,
+          4,
+          2
+        ]
+      }
+    }
+  },
+  "0125": {
+    "id": "0125",
+    "name": "Electabuzz",
+    "anims": {
+      "Walk": {
+        "file": "assets/sprites/0125/Walk-Anim.png",
+        "frameWidth": 40,
+        "frameHeight": 56,
+        "frameCount": 4,
+        "durations": [
+          8,
+          10,
+          8,
+          10
+        ]
+      },
+      "Attack": {
+        "file": "assets/sprites/0125/Attack-Anim.png",
+        "frameWidth": 72,
+        "frameHeight": 72,
+        "frameCount": 10,
+        "durations": [
+          2,
+          6,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      },
+      "Idle": {
+        "file": "assets/sprites/0125/Idle-Anim.png",
+        "frameWidth": 40,
+        "frameHeight": 56,
+        "frameCount": 4,
+        "durations": [
+          28,
+          18,
+          28,
+          18
+        ]
+      }
+    }
+  },
+  "0042": {
+    "id": "0042",
+    "name": "Golbat",
+    "anims": {
+      "Walk": {
+        "file": "assets/sprites/0042/Walk-Anim.png",
+        "frameWidth": 40,
+        "frameHeight": 64,
+        "frameCount": 8,
+        "durations": [
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6,
+          6
+        ]
+      },
+      "Attack": {
+        "file": "assets/sprites/0042/Attack-Anim.png",
+        "frameWidth": 72,
+        "frameHeight": 88,
+        "frameCount": 11,
+        "durations": [
+          2,
+          3,
+          4,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      },
+      "Idle": {
+        "file": "assets/sprites/0042/Idle-Anim.png",
+        "frameWidth": 40,
+        "frameHeight": 56,
+        "frameCount": 4,
+        "durations": [
+          6,
+          6,
+          6,
+          6
+        ]
+      }
+    }
+  },
+  "0112": {
+    "id": "0112",
+    "name": "Rhydon",
+    "anims": {
+      "Walk": {
+        "file": "assets/sprites/0112/Walk-Anim.png",
+        "frameWidth": 32,
+        "frameHeight": 48,
+        "frameCount": 4,
+        "durations": [
+          8,
+          12,
+          8,
+          12
+        ]
+      },
+      "Attack": {
+        "file": "assets/sprites/0112/Attack-Anim.png",
+        "frameWidth": 72,
+        "frameHeight": 80,
+        "frameCount": 10,
+        "durations": [
+          2,
+          6,
+          1,
+          1,
+          1,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      },
+      "Idle": {
+        "file": "assets/sprites/0112/Idle-Anim.png",
+        "frameWidth": 48,
+        "frameHeight": 48,
+        "frameCount": 2,
+        "durations": [
+          40,
+          26
+        ]
+      }
+    }
   }
 }

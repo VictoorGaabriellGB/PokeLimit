@@ -17,7 +17,7 @@ export class BootScene extends Phaser.Scene {
   preload(): void {
     this.createLoadingBar();
 
-    // 1. Carrega os mapas numerados (map1, map2, map3, map4, map6, map7, map5-BOSS)
+    // 1. Carrega os mapas numerados (map1 a map7 + map5-BOSS)
     MapManager.preloadAll(this);
 
     // 2. Carrega todos os spritesheets do PMD Collab

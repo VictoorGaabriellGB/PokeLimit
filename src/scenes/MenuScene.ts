@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { SPECIALS } from '../config/abilities';
-import { GAME_SETTINGS } from '../config/gameConfig';
+import { GAME_SETTINGS, GAME_VERSION } from '../config/gameConfig';
 import {
   MAX_PLAYER_LEVEL,
   POKEMON_CLASSES,
@@ -193,6 +193,18 @@ export class MenuScene extends Phaser.Scene {
         strokeThickness: 7,
       })
       .setOrigin(0, 0);
+
+    // Selo estilizado da Versão do Jogo
+    this.add
+      .text(268, 38, GAME_VERSION, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        fontStyle: 'bold',
+        color: '#38bdf8',
+        backgroundColor: '#0c2238',
+        padding: { x: 8, y: 3 },
+      })
+      .setOrigin(0, 0.5);
 
     this.add
       .text(
@@ -603,6 +615,14 @@ export class MenuScene extends Phaser.Scene {
     startBtnBg.on('pointerdown', () => this.startGame());
     startBtnShine.on('pointerdown', () => this.startGame());
     startBtnLabel.on('pointerdown', () => this.startGame());
+
+    this.add
+      .text(panelX + panelW / 2 - 14, panelY + panelH / 2 - 12, `Versão: ${GAME_VERSION}`, {
+        fontFamily: 'monospace',
+        fontSize: '11px',
+        color: '#64748b',
+      })
+      .setOrigin(1, 1);
   }
 
   private moveSelection(delta: number): void {

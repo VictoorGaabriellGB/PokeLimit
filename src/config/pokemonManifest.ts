@@ -258,9 +258,20 @@ export interface PokemonDefinition {
   baseHp: number;
   speed: number;
   scale: number;
+  canFly?: boolean;
+  canSwim?: boolean;
   innatePassive?: PokemonInnatePassive;
   attackProfile?: PokemonAttackProfile;
   anims: Record<PokemonAnimType, PokemonAnimConfig>;
+}
+
+
+export function isPokemonWater(def: PokemonDefinition): boolean {
+  return def.canSwim === true || def.attackProfile?.element === 'agua';
+}
+
+export function isPokemonFlying(def: PokemonDefinition): boolean {
+  return def.canFly === true || def.id === '0006' || def.id === '0041';
 }
 
 export interface MapDefinition {
@@ -282,64 +293,70 @@ export const MAP_SEQUENCE: MapDefinition[] = [
     name: 'Mapa 1 - Vila Verdejante',
     file: 'assets/maps/map1.jpeg',
     theme: 'forest',
-    worldScale: 1.45,
-    northExitNormX: 0.505,
-    southEntranceNormX: 0.475,
-    initialSpawnNorm: { x: 0.49, y: 0.535 },
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.52 },
   },
   {
     key: 'map2',
     name: 'Mapa 2 - Vale das Falésias',
     file: 'assets/maps/map2.jpeg',
     theme: 'forest',
-    worldScale: 1.45,
-    northExitNormX: 0.575,
-    southEntranceNormX: 0.475,
-    initialSpawnNorm: { x: 0.475, y: 0.88 },
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
     key: 'map3',
     name: 'Mapa 3 - Rota da Clareira',
     file: 'assets/maps/map3.jpeg',
     theme: 'forest',
-    worldScale: 2.6,
-    northExitNormX: 0.495,
-    southEntranceNormX: 0.45,
-    initialSpawnNorm: { x: 0.50, y: 0.655 },
-    // Recorta a guarita e fileira de árvores inferior para o jogador entrar DEPOIS da área em anexo
-    southCropNormY: 0.685,
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
     key: 'map4',
     name: 'Mapa 4 - Cidade Pokémon',
     file: 'assets/maps/map4.jpeg',
     theme: 'forest',
-    worldScale: 1.45,
-    northExitNormX: 0.45,
-    southEntranceNormX: 0.485,
-    initialSpawnNorm: { x: 0.485, y: 0.715 },
-    // Recorta a guarita sul para o jogador entrar EXATAMENTE onde está o Raichu na foto em anexo
-    southCropNormY: 0.735,
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
+  },
+  {
+    key: 'map5',
+    name: 'Mapa 5 - Costa das Marés',
+    file: 'assets/maps/map5.jpeg',
+    theme: 'forest',
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
     key: 'map6',
     name: 'Mapa 6 - Caverna Rochosa (1F)',
     file: 'assets/maps/map6.jpeg',
     theme: 'cave',
-    worldScale: 1.25,
+    worldScale: 1.5,
     northExitNormX: 0.5,
-    southEntranceNormX: 0.495,
-    initialSpawnNorm: { x: 0.495, y: 0.88 },
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
   {
     key: 'map7',
     name: 'Mapa 7 - Profundezas da Caverna (2F)',
     file: 'assets/maps/map7.jpeg',
     theme: 'cave',
-    worldScale: 1.25,
-    northExitNormX: 0.495,
-    southEntranceNormX: 0.495,
-    initialSpawnNorm: { x: 0.495, y: 0.88 },
+    worldScale: 1.5,
+    northExitNormX: 0.5,
+    southEntranceNormX: 0.5,
+    initialSpawnNorm: { x: 0.5, y: 0.88 },
   },
 ];
 
@@ -348,10 +365,10 @@ export const BOSS_MAP_DEFINITION: MapDefinition = {
   name: 'Arena Final - Ginásio de Pedra (BOSS ONIX)',
   file: 'assets/maps/map5-BOSS.jpeg',
   theme: 'boss',
-  worldScale: 1.35,
+  worldScale: 1.5,
   northExitNormX: 0.5,
   southEntranceNormX: 0.5,
-  initialSpawnNorm: { x: 0.5, y: 0.74 },
+  initialSpawnNorm: { x: 0.5, y: 0.72 },
 };
 
 export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
@@ -576,6 +593,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   },
   '0006': {
     id: '0006',
+    canFly: true,
     name: 'Charizard',
     role: 'evolution',
     classId: 'lutador',
@@ -793,6 +811,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   // === LINHA SQUIRTLE -> WARTORTLE -> BLASTOISE (TANK) ===
   '0007': {
     id: '0007',
+    canSwim: true,
     name: 'Squirtle',
     role: 'starter',
     classId: 'tank',
@@ -848,6 +867,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   },
   '0008': {
     id: '0008',
+    canSwim: true,
     name: 'Wartortle',
     role: 'evolution',
     classId: 'tank',
@@ -902,6 +922,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   },
   '0009': {
     id: '0009',
+    canSwim: true,
     name: 'Blastoise',
     role: 'evolution',
     classId: 'tank',
@@ -1096,6 +1117,7 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
   },
   '0041': {
     id: '0041',
+    canFly: true,
     name: 'Zubat',
     role: 'enemy',
     baseHp: 26,
@@ -1122,6 +1144,38 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
         frameHeight: 80,
         frameCount: 11,
         durations: [2, 3, 4, 1, 1, 1, 2, 2, 2, 2, 2],
+      },
+    },
+  },
+  '0074': {
+    id: '0074',
+    name: 'Geodude',
+    role: 'boss',
+    baseHp: 1250,
+    speed: 125,
+    scale: 1.5,
+    canFly: false,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0074/Walk-Anim.png',
+        frameWidth: 32,
+        frameHeight: 32,
+        frameCount: 4,
+        durations: [8, 10, 8, 10],
+      },
+      Idle: {
+        file: 'assets/sprites/0074/Idle-Anim.png',
+        frameWidth: 32,
+        frameHeight: 24,
+        frameCount: 4,
+        durations: [8, 12, 8, 12],
+      },
+      Attack: {
+        file: 'assets/sprites/0074/Attack-Anim.png',
+        frameWidth: 72,
+        frameHeight: 80,
+        frameCount: 14,
+        durations: [3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 2, 2],
       },
     },
   },
@@ -1156,8 +1210,252 @@ export const POKEMON_MANIFEST: Record<string, PokemonDefinition> = {
       },
     },
   },
+  '0123': {
+    id: '0123',
+    name: 'Scyther',
+    role: 'enemy',
+    baseHp: 380,
+    speed: 145,
+    scale: 1.45,
+    canFly: true,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0123/Walk-Anim.png',
+        frameWidth: 40,
+        frameHeight: 48,
+        frameCount: 4,
+        durations: [8, 10, 8, 10],
+      },
+      Idle: {
+        file: 'assets/sprites/0123/Idle-Anim.png',
+        frameWidth: 32,
+        frameHeight: 48,
+        frameCount: 4,
+        durations: [40, 10, 14, 10],
+      },
+      Attack: {
+        file: 'assets/sprites/0123/Attack-Anim.png',
+        frameWidth: 72,
+        frameHeight: 80,
+        frameCount: 10,
+        durations: [2, 4, 1, 1, 1, 2, 2, 2, 2, 2],
+      },
+    },
+  },
+  '0126': {
+    id: '0126',
+    name: 'Magmar',
+    role: 'enemy',
+    baseHp: 440,
+    speed: 120,
+    scale: 1.4,
+    canFly: false,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0126/Walk-Anim.png',
+        frameWidth: 32,
+        frameHeight: 48,
+        frameCount: 4,
+        durations: [8, 10, 8, 10],
+      },
+      Idle: {
+        file: 'assets/sprites/0126/Idle-Anim.png',
+        frameWidth: 32,
+        frameHeight: 48,
+        frameCount: 4,
+        durations: [40, 6, 12, 6],
+      },
+      Attack: {
+        file: 'assets/sprites/0126/Attack-Anim.png',
+        frameWidth: 72,
+        frameHeight: 80,
+        frameCount: 10,
+        durations: [2, 4, 1, 1, 1, 2, 2, 2, 2, 2],
+      },
+    },
+  },
+  '0062': {
+    id: '0062',
+    name: 'Poliwrath',
+    role: 'enemy',
+    baseHp: 480,
+    speed: 115,
+    scale: 1.45,
+    canFly: false,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0062/Walk-Anim.png',
+        frameWidth: 40,
+        frameHeight: 40,
+        frameCount: 4,
+        durations: [8, 10, 8, 10],
+      },
+      Idle: {
+        file: 'assets/sprites/0062/Idle-Anim.png',
+        frameWidth: 32,
+        frameHeight: 48,
+        frameCount: 4,
+        durations: [40, 2, 4, 2],
+      },
+      Attack: {
+        file: 'assets/sprites/0062/Attack-Anim.png',
+        frameWidth: 72,
+        frameHeight: 80,
+        frameCount: 10,
+        durations: [2, 6, 1, 1, 2, 2, 2, 2, 2, 2],
+      },
+    },
+  },
+  '0125': {
+    id: '0125',
+    name: 'Electabuzz',
+    role: 'enemy',
+    baseHp: 420,
+    speed: 135,
+    scale: 1.4,
+    canFly: false,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0125/Walk-Anim.png',
+        frameWidth: 40,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [8, 10, 8, 10],
+      },
+      Idle: {
+        file: 'assets/sprites/0125/Idle-Anim.png',
+        frameWidth: 40,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [28, 18, 28, 18],
+      },
+      Attack: {
+        file: 'assets/sprites/0125/Attack-Anim.png',
+        frameWidth: 72,
+        frameHeight: 72,
+        frameCount: 10,
+        durations: [2, 6, 1, 1, 1, 2, 2, 2, 2, 2],
+      },
+    },
+  },
+  '0042': {
+    id: '0042',
+    name: 'Golbat',
+    role: 'enemy',
+    baseHp: 360,
+    speed: 140,
+    scale: 1.45,
+    canFly: true,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0042/Walk-Anim.png',
+        frameWidth: 40,
+        frameHeight: 64,
+        frameCount: 8,
+        durations: [6, 6, 6, 6, 6, 6, 6, 6],
+      },
+      Idle: {
+        file: 'assets/sprites/0042/Idle-Anim.png',
+        frameWidth: 40,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [6, 6, 6, 6],
+      },
+      Attack: {
+        file: 'assets/sprites/0042/Attack-Anim.png',
+        frameWidth: 72,
+        frameHeight: 88,
+        frameCount: 11,
+        durations: [2, 3, 4, 1, 1, 1, 2, 2, 2, 2, 2],
+      },
+    },
+  },
+  '0112': {
+    id: '0112',
+    name: 'Rhydon',
+    role: 'enemy',
+    baseHp: 550,
+    speed: 105,
+    scale: 1.55,
+    canFly: false,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0112/Walk-Anim.png',
+        frameWidth: 32,
+        frameHeight: 48,
+        frameCount: 4,
+        durations: [8, 12, 8, 12],
+      },
+      Idle: {
+        file: 'assets/sprites/0112/Idle-Anim.png',
+        frameWidth: 48,
+        frameHeight: 48,
+        frameCount: 2,
+        durations: [40, 26],
+      },
+      Attack: {
+        file: 'assets/sprites/0112/Attack-Anim.png',
+        frameWidth: 72,
+        frameHeight: 80,
+        frameCount: 10,
+        durations: [2, 6, 1, 1, 1, 2, 2, 2, 2, 2],
+      },
+    },
+  },
+  '0131': {
+    id: '0131',
+    name: 'Lapras',
+    role: 'enemy',
+    baseHp: 510,
+    speed: 120,
+    scale: 1.48,
+    canFly: false,
+    canSwim: true,
+    anims: {
+      Walk: {
+        file: 'assets/sprites/0131/Walk-Anim.png',
+        frameWidth: 48,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [10, 12, 10, 12],
+      },
+      Idle: {
+        file: 'assets/sprites/0131/Idle-Anim.png',
+        frameWidth: 48,
+        frameHeight: 56,
+        frameCount: 4,
+        durations: [40, 12, 16, 12],
+      },
+      Attack: {
+        file: 'assets/sprites/0131/Attack-Anim.png',
+        frameWidth: 88,
+        frameHeight: 88,
+        frameCount: 12,
+        durations: [2, 2, 6, 1, 1, 1, 2, 2, 2, 2, 2, 2],
+      },
+    },
+  },
 };
 
 export const STARTER_IDS = ['0025', '0004', '0001', '0007', '0039'] as const;
 export const ENEMY_IDS = ['0019', '0041'] as const;
+export const BOSS_GEODUDE_ID = '0074';
+export const BOSS_ONIX_ID = '0095';
 export const BOSS_ID = '0095';
+
+export interface MinibossConfig {
+  id: string;
+  name: string;
+  title: string;
+  element: ElementType | 'veneno' | 'normal' | string;
+}
+
+export const MAP_MINIBOSS_CONFIGS: Record<string, MinibossConfig> = {
+  map1: { id: '0123', name: 'Scyther Alfa', title: '🍃 Retalhador da Floresta', element: 'planta' },
+  map2: { id: '0126', name: 'Magmar Vulcânico', title: '🔥 Fera das Falésias', element: 'fogo' },
+  map3: { id: '0062', name: 'Poliwrath Campeão', title: '💧 Guardião dos Rios', element: 'agua' },
+  map4: { id: '0125', name: 'Electabuzz Trovão', title: '⚡ Tirano das Ruas', element: 'eletrico' },
+  map5: { id: '0131', name: 'Lapras Guardião', title: '🌊 Soberano das Marés', element: 'agua' },
+  map6: { id: '0042', name: 'Golbat Alfa', title: '🦇 Terror das Cavernas', element: 'veneno' },
+  map7: { id: '0112', name: 'Rhydon Titânico', title: '🪨 Guardião das Profundezas', element: 'rocha' },
+};
