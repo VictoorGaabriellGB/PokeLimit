@@ -2016,7 +2016,7 @@ export class Player {
     ) {
       const spr = this.scene.add.sprite(cfg.x, cfg.y, cfg.sheetKey, 0);
       spr.play(cfg.animKey);
-      spr.setScale(cfg.scale ?? 0.65);
+      spr.setScale(cfg.scale ?? 1.0);
       shape = spr;
     } else {
       shape = cfg.drawFallback();
@@ -2076,13 +2076,7 @@ export class Player {
           const tx = p.sprite.x - Math.cos(p.angle) * 8;
           const ty = p.sprite.y - Math.sin(p.angle) * 8;
           const t = this.scene.add
-            .circle(
-              shape.x - Math.cos(cfg.angle) * 10,
-              shape.y - Math.sin(cfg.angle) * 10,
-              3.5,
-              cfg.trailColor,
-              0.55
-            )
+            .circle(tx, ty, 2.8, p.trailColor, 0.55)
             .setDepth(DEPTH.EFFECTS - 1);
           this.scene.tweens.add({
             targets: t,
@@ -2131,7 +2125,7 @@ export class Player {
     return out;
   }
 
-  private spawnElectricImpact(x: number, y: number, maxRadius = 36): void {
+  private spawnElectricImpact(x: number, y: number, maxRadius = 32): void {
     if (
       this.scene.textures.exists('sheet-attack-eletric-hit') &&
       this.scene.anims.exists('anim-attack-eletric-hit')
@@ -2148,26 +2142,27 @@ export class Player {
       this.scene.anims.exists('anim-attack-eletric-hit')
     ) {
       const fx = this.scene.add
-        .sprite(x, y, 'sheet-attack-eletric', 2)
-        .setScale(0.55)
+        .sprite(x, y, 'sheet-attack-eletric', 4)
+        .setScale(1.0)
         .setRotation(Math.random() * Math.PI * 2)
         .setDepth(DEPTH.EFFECTS + 1);
       fx.play('anim-attack-eletric-hit');
       fx.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => fx.destroy());
+    } else {
+      const burst = this.scene.add
+        .circle(x, y, 8, 0xf7d02c, 0.55)
+        .setDepth(DEPTH.EFFECTS);
+      this.scene.tweens.add({
+        targets: burst,
+        radius: maxRadius,
+        alpha: 0,
+        duration: 160,
+        onComplete: () => burst.destroy(),
+      });
     }
-    const burst = this.scene.add
-      .circle(x, y, 10, 0xf7d02c, 0.55)
-      .setDepth(DEPTH.EFFECTS);
-    this.scene.tweens.add({
-      targets: burst,
-      radius: maxRadius,
-      alpha: 0,
-      duration: 180,
-      onComplete: () => burst.destroy(),
-    });
   }
 
-  private spawnWaterSplash(x: number, y: number, scale = 0.72): void {
+  private spawnWaterSplash(x: number, y: number, scale = 1.0): void {
     if (
       this.scene.textures.exists('sheet-attack-water-hit') &&
       this.scene.anims.exists('anim-attack-water-hit')
@@ -2184,12 +2179,12 @@ export class Player {
     }
 
     const splash = this.scene.add
-      .circle(x, y, 14, 0x00b4d8, 0.6)
-      .setStrokeStyle(3, 0xffffff, 1)
+      .circle(x, y, 10 * scale, 0x00b4d8, 0.6)
+      .setStrokeStyle(2.5, 0xffffff, 1)
       .setDepth(DEPTH.EFFECTS);
     this.scene.tweens.add({
       targets: splash,
-      radius: 48 * scale,
+      radius: 36 * scale,
       alpha: 0,
       duration: 200,
       onComplete: () => splash.destroy(),
@@ -2209,11 +2204,11 @@ export class Player {
         angle,
         speed: 520,
         range: p.range * this.rangeMult,
-        hitRadius: 28,
+        hitRadius: 14,
         pierce,
-        scale: 0.68,
-        sheetKey: 'sheet-attack-eletric',
-        animKey: 'anim-attack-eletric',
+        scale: 1.0,
+        sheetKey: "sheet-attack-eletric",
+        animKey: "anim-attack-eletric",
         trailColor: 0xfef08a,
         drawFallback: () =>
           this.scene.add
@@ -2225,7 +2220,7 @@ export class Player {
             fromX: px,
             fromY: py,
           });
-          this.spawnElectricImpact(px, py, 34);
+          this.spawnElectricImpact(px, py, 30);
         },
       });
     }
@@ -2237,97 +2232,67 @@ export class Player {
     const count = 1 + this.getAbilityLevel("multishot");
     const pierce = this.getAbilityLevel("pierce");
     const range = p.range * this.rangeMult;
-    const halfArc =
-      0.55 + multi * 0.26 + this.getAbilityLevel('fire_tough_claws') * 0.05;
 
-    const hasAnim =
-      this.scene.textures.exists('sheet-attack-fire') &&
-      this.scene.anims.exists('anim-attack-fire-slash');
-    const flames = 3 + multi * 2;
-
-    for (const a of this.spreadAngles(
-      aim,
-      flames,
-      (halfArc * 2) / Math.max(1, flames - 1)
-    )) {
-      const fx = this.sprite.x + Math.cos(a) * range * 0.34;
-      const fy = this.sprite.y + Math.sin(a) * range * 0.34;
-
-      if (hasAnim) {
-        const flameSpr = this.scene.add
-          .sprite(fx, fy, 'sheet-attack-fire', 1)
-          .setScale(0.68)
-          .setRotation(a) // Ponta da chama aponta diretamente no ângulo 'a'!
-          .setDepth(DEPTH.EFFECTS);
-        flameSpr.play('anim-attack-fire-slash');
-        this.scene.tweens.add({
-          targets: flameSpr,
-          x: this.sprite.x + Math.cos(a) * range * 0.85,
-          y: this.sprite.y + Math.sin(a) * range * 0.85,
-          scale: 0.92,
-          alpha: 0,
-          duration: 280,
-          onComplete: () => flameSpr.destroy(),
-        });
-      } else {
-        const flame = this.scene.add
-          .circle(fx, fy, 15, p.elementColor, 0.75)
-          .setStrokeStyle(3, p.secondaryColor, 1)
-          .setDepth(DEPTH.EFFECTS);
-        this.scene.tweens.add({
-          targets: flame,
-          x: this.sprite.x + Math.cos(a) * range * 0.8,
-          y: this.sprite.y + Math.sin(a) * range * 0.8,
-          scale: 1.5,
-          alpha: 0,
-          duration: 240,
-          onComplete: () => flame.destroy(),
-        });
-      }
+    // Se houver inimigo em alcance corpo a corpo (<= 52px), desfere um golpe de garra ígnea em arco
+    const nearEnemy = this.enemiesProvider().find(
+      (e) => !e.isDead && Phaser.Math.Distance.Between(this.sprite.x, this.sprite.y, e.sprite.x, e.sprite.y) <= 52
+    );
+    if (
+      nearEnemy &&
+      this.scene.textures.exists("sheet-attack-fire") &&
+      this.scene.anims.exists("anim-attack-fire-slash")
+    ) {
+      const slashX = this.sprite.x + Math.cos(aim) * 22;
+      const slashY = this.sprite.y + Math.sin(aim) * 22;
+      const slash = this.scene.add
+        .sprite(slashX, slashY, "sheet-attack-fire", 4)
+        .setRotation(aim)
+        .setScale(1.0)
+        .setDepth(DEPTH.EFFECTS + 1);
+      slash.play("anim-attack-fire-slash");
+      slash.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => slash.destroy());
     }
 
-    for (const e of this.enemiesProvider()) {
-      if (e.isDead) continue;
-      const d = Phaser.Math.Distance.Between(
-        this.sprite.x,
-        this.sprite.y,
-        e.sprite.x,
-        e.sprite.y
-      );
-      if (d > range) continue;
-      const angTo = Math.atan2(
-        e.sprite.y - this.sprite.y,
-        e.sprite.x - this.sprite.x
-      );
-      if (
-        Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= halfArc + 0.24 ||
-        d < 26
-      ) {
-        // A Queimadura ocorre pelos 5% base (+ Poder Solar) dentro de dealDamage!
-        this.dealDamage(e, p.baseDamage * dmgScale, {
-          knockback: 230,
-        });
-      }
+    // Disparo fluido de cometas de fogo aerodinâmicos
+    for (const angle of this.spreadAngles(aim, count, 0.22)) {
+      this.spawnProjectile({
+        x: this.sprite.x + Math.cos(angle) * 20,
+        y: this.sprite.y + Math.sin(angle) * 20,
+        angle,
+        speed: 480,
+        range,
+        hitRadius: 15,
+        pierce,
+        scale: 1.0,
+        sheetKey: "sheet-attack-fire",
+        animKey: "anim-attack-fire",
+        trailColor: 0xf97316,
+        drawFallback: () =>
+          this.scene.add
+            .circle(0, 0, 10, p.elementColor, 1)
+            .setStrokeStyle(2.5, p.secondaryColor, 1),
+        onHit: (e, px, py) => {
+          this.dealDamage(e, p.baseDamage * 1.12 * dmgScale, {
+            knockback: 190,
+            fromX: px,
+            fromY: py,
+          });
+          e.applyStatusEffect({
+            dotDamagePerSec: 4 + this.getAbilityLevel("fire_solar_power") * 2,
+            dotDurationMs: 2200,
+            tintColor: 0xf97316,
+            statusIcon: "🔥",
+          });
+        },
+      });
     }
   }
 
   /** BULBASAUR / IVYSAUR / VENUSAUR — Folhas Navalha alinhadas ao vetor de disparo (+X)! */
   private basicRazorLeaves(aim: number, dmgScale: number): void {
     const p = this.profile;
-    const count = 2 + this.getAbilityLevel('multishot');
-    const pierce = 1 + this.getAbilityLevel('pierce') * 2;
-
-    const ring = this.scene.add
-      .circle(this.sprite.x, this.sprite.y, 14, p.secondaryColor, 0.25)
-      .setStrokeStyle(2, p.elementColor, 0.85)
-      .setDepth(DEPTH.EFFECTS - 2);
-    this.scene.tweens.add({
-      targets: ring,
-      radius: 52,
-      alpha: 0,
-      duration: 260,
-      onComplete: () => ring.destroy(),
-    });
+    const count = 2 + this.getAbilityLevel("multishot");
+    const pierce = 1 + this.getAbilityLevel("pierce") * 2;
 
     for (const angle of this.spreadAngles(aim, count, 0.16)) {
       this.spawnProjectile({
@@ -2336,15 +2301,15 @@ export class Player {
         angle,
         speed: 440,
         range: p.range * this.rangeMult,
-        hitRadius: 26,
+        hitRadius: 13,
         pierce,
-        scale: 0.64,
-        sheetKey: 'sheet-attack-grass',
-        animKey: 'anim-attack-grass',
+        scale: 1.0,
+        sheetKey: "sheet-attack-grass",
+        animKey: "anim-attack-grass",
         trailColor: 0x86efac,
         drawFallback: () =>
           this.scene.add
-            .ellipse(0, 0, 18, 8, p.elementColor, 1)
+            .ellipse(0, 0, 16, 7, p.elementColor, 1)
             .setStrokeStyle(2, p.secondaryColor, 1),
         onHit: (e, px, py) => {
           this.dealDamage(e, p.baseDamage * dmgScale, {
@@ -2368,31 +2333,31 @@ export class Player {
 
     for (const angle of this.spreadAngles(aim, waves, 0.22)) {
       this.spawnProjectile({
-        x: this.sprite.x + Math.cos(angle) * 22,
-        y: this.sprite.y + Math.sin(angle) * 22,
+        x: this.sprite.x + Math.cos(angle) * 20,
+        y: this.sprite.y + Math.sin(angle) * 20,
         angle,
         speed: 460,
         range: p.range * this.rangeMult,
-        hitRadius: 31,
-        pierce: this.getAbilityLevel('pierce'),
-        scale: 0.72,
-        sheetKey: 'sheet-attack-water',
-        animKey: 'anim-attack-water',
-        trailColor: 0x90e0ef,
+        hitRadius: 15,
+        pierce: this.getAbilityLevel("pierce"),
+        scale: 1.0,
+        sheetKey: "sheet-attack-water",
+        animKey: "anim-attack-water",
+        trailColor: 0x38bdf8,
         drawFallback: () =>
           this.scene.add
-            .circle(0, 0, 14, p.elementColor, 0.75)
-            .setStrokeStyle(3, p.secondaryColor, 1),
+            .circle(0, 0, 12, p.elementColor, 0.85)
+            .setStrokeStyle(2.5, p.secondaryColor, 1),
         onHit: (e, px, py) => {
           this.dealDamage(e, p.baseDamage * dmgScale, {
             knockback: 260,
             fromX: px,
             fromY: py,
           });
-          this.spawnWaterSplash(px, py, 0.66);
+          this.spawnWaterSplash(px, py, 1.0);
         },
         onEnd: (ex, ey) => {
-          this.spawnWaterSplash(ex, ey, 0.75);
+          this.spawnWaterSplash(ex, ey, 0.9);
         },
       });
     }
@@ -2401,25 +2366,24 @@ export class Player {
   /** JIGGLYPUFF / WIGGLYTUFF — Crescente Harmônico Direcional (+X) + Aura Musical de Cura! */
   private basicSupportMelody(aim: number, dmgScale: number): void {
     const p = this.profile;
-    const count = 1 + this.getAbilityLevel('multishot');
+    const count = 1 + this.getAbilityLevel("multishot");
     const radius = p.range * 0.72 * this.rangeMult;
 
     this.supportBuffTimerMs = 4000;
     this.heal(Math.max(1, Math.round(4 * this.healEfficiency)));
 
-    // 1. Dispara ondas crescentes harmônicas na direção do inimigo visado (+X)
-    for (const angle of this.spreadAngles(aim, count, 0.25)) {
+    for (const angle of this.spreadAngles(aim, count, 0.22)) {
       this.spawnProjectile({
         x: this.sprite.x + Math.cos(angle) * 16,
         y: this.sprite.y + Math.sin(angle) * 16,
         angle,
         speed: 420,
         range: p.range * 1.15 * this.rangeMult,
-        hitRadius: 28,
-        pierce: 1 + this.getAbilityLevel('pierce'),
-        scale: 0.72,
-        sheetKey: 'sheet-attack-fairy',
-        animKey: 'anim-attack-fairy',
+        hitRadius: 14,
+        pierce: 1 + this.getAbilityLevel("pierce"),
+        scale: 1.0,
+        sheetKey: "sheet-attack-fairy",
+        animKey: "anim-attack-fairy",
         trailColor: 0xfbcfe8,
         drawFallback: () =>
           this.scene.add
@@ -2522,7 +2486,7 @@ export class Player {
     ) {
       const shield = this.scene.add
         .sprite(px, py, 'sheet-especial-eletrico', 0)
-        .setScale(0.92)
+        .setScale(0.58)
         .setDepth(DEPTH.EFFECTS + 2);
       shield.play('anim-especial-eletrico');
       shield.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () =>
@@ -2553,8 +2517,8 @@ export class Player {
         cx = x + Phaser.Math.Between(-14, 14);
         g.lineTo(cx, Math.min(cy, y));
       }
-      g.strokePath();
-      this.spawnElectricImpact(x, y, 54);
+            g.strokePath();
+      this.spawnElectricImpact(x, y, 42);
       this.scene.tweens.add({
         targets: g,
         alpha: 0,
@@ -2638,7 +2602,7 @@ export class Player {
       const flameStream = this.scene.add
         .sprite(nozzleX, nozzleY, 'sheet-especial-fogo', 0)
         .setOrigin(0.045, 0.5) // Ancora no bico esquerdo para disparar exatamente na direção 'aim'
-        .setScale(0.95 * this.rangeMult)
+        .setScale(0.58 * this.rangeMult)
         .setRotation(aim)
         .setDepth(DEPTH.EFFECTS + 2);
       flameStream.play('anim-especial-fogo');
@@ -2658,7 +2622,7 @@ export class Player {
       if (d > range) continue;
       const angTo = Math.atan2(e.sprite.y - py, e.sprite.x - px);
       if (Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= 0.62 || d < 32) {
-        this.dealDamage(e, base * 2.35, {
+                this.dealDamage(e, base * 2.35, {
           special: true,
           knockback: 330,
           fromX: px,
@@ -2678,58 +2642,64 @@ export class Player {
     }
   }
 
-  /** ULT Planta: Raio Solar Tóxico — Envenenamento Tóxico 100% garantido! */
-  private specialSolarBeam(aim: number, base: number): void {
-    const length = 480 * this.rangeMult;
-    const halfWidth = 30;
-    const sx = this.sprite.x;
-    const sy = this.sprite.y;
-    const ex = sx + Math.cos(aim) * length;
-    const ey = sy + Math.sin(aim) * length;
-
-    const charge = this.scene.add
-      .circle(sx, sy, 12, 0xfef08a, 0.85)
-      .setStrokeStyle(3, 0x4ade80, 1)
-      .setDepth(DEPTH.EFFECTS);
+    private spawnFireExplosion(x: number, y: number, damage: number): void {
+    const blast = this.scene.add
+      .circle(x, y, 75, 0xff7a1a, 0.55)
+      .setStrokeStyle(3.5, 0xffd24a, 1)
+      .setDepth(DEPTH.EFFECTS + 2)
+      .setScale(0.2);
     this.scene.tweens.add({
-      targets: charge,
-      radius: 36,
-      duration: 190,
-      yoyo: true,
-      onComplete: () => charge.destroy(),
+      targets: blast,
+      scale: 1,
+      alpha: 0,
+      duration: 360,
+      onComplete: () => blast.destroy(),
     });
-
-    this.scene.time.delayedCall(190, () => {
-      if (this.isDead) return;
-      const beam = this.scene.add.graphics().setDepth(DEPTH.EFFECTS + 1);
-      beam.lineStyle(halfWidth * 2, 0xa855f7, 0.28);
-      beam.lineBetween(sx, sy, ex, ey);
-      beam.lineStyle(halfWidth * 1.25, 0x4ade80, 0.88);
-      beam.lineBetween(sx, sy, ex, ey);
-      beam.lineStyle(10, 0xfef08a, 1);
-      beam.lineBetween(sx, sy, ex, ey);
-
-      // Folhas e esporos viajando na direção do feixe (+aim)
-      if (this.scene.textures.exists('sheet-attack-grass')) {
-        for (let step = 70; step < length; step += 90) {
-          const lx = sx + Math.cos(aim) * step;
-          const ly = sy + Math.sin(aim) * step;
-          const leafFx = this.scene.add
-            .sprite(lx, ly, 'sheet-attack-grass', 5)
-            .setScale(0.6)
-            .setRotation(aim)
-            .setDepth(DEPTH.EFFECTS + 2);
-          this.scene.tweens.add({
-            targets: leafFx,
-            x: lx + Math.cos(aim) * 55,
-            y: ly + Math.sin(aim) * 55,
-            alpha: 0,
-            duration: 360,
-            onComplete: () => leafFx.destroy(),
-          });
-        }
+    for (const e of this.enemiesProvider()) {
+      if (e.isDead) continue;
+      if (Phaser.Math.Distance.Between(x, y, e.sprite.x, e.sprite.y) <= 75) {
+        this.dealDamage(e, damage, { special: true, secondary: true, skipBasicProc: true });
+        e.applyStatusEffect({ dotDamagePerSec: 10, dotDurationMs: 2500, tintColor: 0xff7b00, statusIcon: '🔥' });
       }
+    }
+  }
 
+  /** ULT Planta (Bulbasaur/Ivysaur/Venusaur): Pó do Sono Supremo — Coloca pokémons para dormir por 3 segundos! */
+  private specialSleepPowder(aim: number, base: number): void {
+    const px = this.sprite.x;
+    const py = this.sprite.y;
+    const range = 360 * this.rangeMult;
+
+    // Flash hipnótico lavanda na tela e tremor sutil
+    this.scene.cameras.main.flash(220, 192, 132, 252, false);
+    this.scene.cameras.main.shake(180, 0.004);
+
+    // Ondas hipnóticas de sono emanando do Bulbasaur
+    for (let r = 0; r < 3; r++) {
+      const ring = this.scene.add
+        .circle(px, py, 20, 0xa855f7, 0.32)
+        .setStrokeStyle(3.5, 0xc084fc, 0.9)
+        .setDepth(DEPTH.EFFECTS + 1);
+      this.scene.tweens.add({
+        targets: ring,
+        radius: range * (0.55 + r * 0.22),
+        alpha: 0,
+        delay: r * 140,
+        duration: 520,
+        onComplete: () => ring.destroy(),
+      });
+    }
+
+    // Nuvem densa de esporos soníferos coloridos (violeta, esmeralda, dourado) se espalhando em leque
+    const sporeColors = [0xc084fc, 0x9333ea, 0x4ade80, 0x86efac, 0xfef08a];
+    for (let i = 0; i < 38; i++) {
+      const ang = aim + Phaser.Math.FloatBetween(-0.95, 0.95);
+      const dist = Phaser.Math.Between(50, range);
+      const color = Phaser.Utils.Array.GetRandom(sporeColors);
+      const radius = Phaser.Math.Between(4, 9);
+      const spore = this.scene.add
+        .circle(px, py, radius, color, 0.85)
+        .setDepth(DEPTH.EFFECTS + 2);
       this.scene.tweens.add({
         targets: spore,
         x: px + Math.cos(ang) * dist,
@@ -2740,52 +2710,64 @@ export class Player {
         duration: 750,
         onComplete: () => spore.destroy(),
       });
+    }
 
-      const poisonMult =
-        (1 + this.getAbilityLevel('grass_effect_spore') * 0.24) *
-        (1 + this.classDef.stats.effectStrengthBonus);
+    // Efeito em todos os inimigos na área ou no cone:
+    // Causa dano e COLOCA PARA DORMIR POR 3 SEGUNDOS (ficam 100% imóveis, sem atacar)!
+    for (const e of this.enemiesProvider()) {
+      if (e.isDead) continue;
+      const d = Phaser.Math.Distance.Between(px, py, e.sprite.x, e.sprite.y);
+      if (d > range) continue;
+      const angTo = Math.atan2(e.sprite.y - py, e.sprite.x - px);
+      const inCone = Math.abs(Phaser.Math.Angle.Wrap(angTo - aim)) <= 0.85 || d <= 65;
 
-      const line = new Phaser.Geom.Line(sx, sy, ex, ey);
-      for (const e of this.enemiesProvider()) {
-        if (e.isDead) continue;
-        const pt = Phaser.Geom.Line.GetNearestPoint(
-          line,
-          new Phaser.Geom.Point(e.sprite.x, e.sprite.y)
-        );
-        const onSegment =
-          Math.min(sx, ex) - halfWidth <= pt.x &&
-          pt.x <= Math.max(sx, ex) + halfWidth &&
-          Math.min(sy, ey) - halfWidth <= pt.y &&
-          pt.y <= Math.max(sy, ey) + halfWidth;
-        if (
-          onSegment &&
-          Phaser.Math.Distance.Between(pt.x, pt.y, e.sprite.x, e.sprite.y) <=
-            halfWidth + 14
-        ) {
-          this.dealDamage(e, base * 2.25, {
-            special: true,
-            knockback: 180,
-            skipBasicProc: true,
-          });
-          // ULT do Bulbasaur SEMPRE aplica Envenenamento Tóxico!
-          e.applyStatusEffect({
-            slowFactor: 0.35,
-            slowDurationMs: 3400,
-            dotDamagePerSec: 10 * poisonMult,
-            dotDurationMs: 4500,
-            tintColor: 0x4ade80,
-            statusIcon: '☠️',
-          });
-        }
+      if (inCone) {
+        this.dealDamage(e, base * 2.35, {
+          special: true,
+          knockback: 70,
+          fromX: px,
+          fromY: py,
+          skipBasicProc: true,
+        });
+
+        // Coloca o pokémon para dormir por 3 segundos (3000 ms)!
+        e.applySleep(3000);
       }
     }
   }
 
   /** ULT Água: Hidro Vórtice + Bolha Protetora de 50% de Redução */
   private specialHydroVortex(aim: number, base: number): void {
-    const radius = 195 * this.rangeMult;
-    const cx = this.sprite.x + Math.cos(aim) * 80;
-    const cy = this.sprite.y + Math.sin(aim) * 80;
+    const radius = 180 * this.rangeMult;
+    const cx = this.sprite.x + Math.cos(aim) * 60;
+    const cy = this.sprite.y + Math.sin(aim) * 60;
+
+    // Bolha Protetora: Squirtle fica protegido por uma bolha d'água reluzente
+    this.invulnerableMs = Math.max(this.invulnerableMs, 2600);
+    const bubble = this.scene.add
+      .circle(this.sprite.x, this.sprite.y, 42, 0x5ec8ff, 0.32)
+      .setStrokeStyle(3.5, 0xbfeaff, 0.95)
+      .setDepth(DEPTH.EFFECTS + 3);
+    
+    const followTimer = this.scene.time.addEvent({
+      delay: 16,
+      repeat: 160,
+      callback: () => {
+        if (!bubble.active) return;
+        bubble.setPosition(this.sprite.x, this.sprite.y);
+      }
+    });
+
+    this.scene.tweens.add({
+      targets: bubble,
+      alpha: 0,
+      delay: 2200,
+      duration: 400,
+      onComplete: () => {
+        followTimer.remove();
+        bubble.destroy();
+      }
+    });
 
     if (
       this.scene.textures.exists('sheet-especial-agua') &&
@@ -2793,7 +2775,7 @@ export class Player {
     ) {
       const vortexSpr = this.scene.add
         .sprite(cx, cy, 'sheet-especial-agua', 0)
-        .setScale(0.95)
+        .setScale(0.62)
         .setDepth(DEPTH.EFFECTS + 1);
       vortexSpr.play('anim-especial-agua');
       this.scene.tweens.add({

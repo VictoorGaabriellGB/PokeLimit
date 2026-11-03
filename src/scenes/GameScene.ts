@@ -326,20 +326,28 @@ export class GameScene extends Phaser.Scene {
       this.compassText.setVisible(false);
     }
 
-    // 2. Spawner de inimigos
+    // 2. Spawner de inimigos intensificado com ondas dinâmicas
     this.spawnTimerMs += delta;
     const isBossActive = Boolean(this.bossEnemy && !this.bossEnemy.isDead);
     const maxEnemies = isBossActive
-      ? 5
-      : Math.min(26, 16 + Math.floor(this.runTimeSeconds / 30) * 2);
-    const spawnInterval = isBossActive ? 5200 : 2000;
+      ? 8
+      : Math.min(55, 30 + Math.floor(this.runTimeSeconds / 20) * 3);
+    const spawnInterval = isBossActive
+      ? 3800
+      : Math.max(750, 1600 - Math.floor(this.runTimeSeconds / 15) * 80);
 
     if (this.spawnTimerMs >= spawnInterval && this.enemies.length < maxEnemies) {
       this.spawnTimerMs = 0;
-      this.spawnWildPokemon();
+      const countToSpawn = Math.min(
+        maxEnemies - this.enemies.length,
+        1 + Math.floor(this.runTimeSeconds / 45)
+      );
+      for (let s = 0; s < countToSpawn; s++) {
+        this.spawnWildPokemon();
+      }
     }
 
-    // 3. Atualiza inimigos e verifica dano de contato (acionando passivas inatas de contato!)
+    // 3. Atualiza inimigos, despawn por distância e verificação de dano de contato
     this.enemies = this.enemies.filter((enemy) => {
       if (enemy.isDead) return false;
 
@@ -407,16 +415,13 @@ export class GameScene extends Phaser.Scene {
         }
       );
 
-      if (!enemy.isDead && !enemy.isIncapacitated()) {
-        const distToPlayer = Phaser.Math.Distance.Between(
-          px,
-          py,
-          enemy.sprite.x,
-          enemy.sprite.y
-        );
+      // Inimigos dormindo ou incapacitados NÃO causam dano de contato!
+      if (!enemy.isDead && !enemy.isIncapacitated() && !enemy.isSleeping()) {
         if (distToPlayer <= enemy.getContactRadius()) {
           const contactDmg = enemy.isBoss
             ? 22
+            : enemy.isMiniboss
+            ? 14 + this.mapManager.mapsCleared * 2
             : 8 + this.mapManager.mapsCleared * 2;
           this.player.receiveDamage(contactDmg, enemy);
         }
@@ -479,9 +484,6 @@ export class GameScene extends Phaser.Scene {
     const x = enemy.sprite.x;
     const y = enemy.sprite.y;
     this.defeatedCount++;
-
-    // Carga dual da ultimate (+3.33% por abate comum, +50% por chefe) & proc de morte
-    this.player.onEnemyKilled(enemy);
 
     // 1. Chefes da Arena Final (Fase 1: Geodude -> Fase 2: Onix)
     if (enemy.isBoss) {

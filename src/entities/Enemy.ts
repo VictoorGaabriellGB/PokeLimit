@@ -41,17 +41,6 @@ export class Enemy {
   private sleepIcon: Phaser.GameObjects.Text | null = null;
   private sleepTimerMs = 0;
 
-  // Mecânicas avançadas de Sono (Bulbasaur Pó do Sono / Jigglypuff)
-  public isSleeping = false;
-  public sleepRemainingMs = 0;
-
-  // Máquina de estados da investida telegrafada do Boss Onix
-  public onixPhase: 'pursue' | 'warning' | 'charge' | 'rest' = 'pursue';
-  public onixPhaseTimerMs = 0;
-  public onixChargeAngle = 0;
-  public onixWarningGfx: Phaser.GameObjects.Rectangle | null = null;
-  public isCharging = false;
-
   constructor(
     scene: Phaser.Scene,
     x: number,
