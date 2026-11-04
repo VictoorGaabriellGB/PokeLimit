@@ -10,19 +10,6 @@ import { MAP_LAYOUTS, NormalizedBox } from '../config/mapLayouts';
 export type MapCellType = 'walkable' | 'water' | 'building' | 'boundary';
 
 const RAW_CELL_SIZE = 16;
-/** Abertura física da pontezinha entre os mapas (meia-largura em px do mundo) */
-const GAP_HALF_WIDTH = 56;
-/** Altura da faixa de mescla entre os mapas */
-const SEAM_BLEND_HEIGHT = 200;
-/** Altura total da pontezinha desenhada que atravessa a emenda */
-const SEAM_BRIDGE_HEIGHT = 380;
-/**
- * O jogador só "entra" oficialmente no novo mapa quando a câmera já não enxerga
- * mais o mapa antigo.
-*/
-const ENTRY_DISTANCE_PAST_SEAM = 340;
-
-// MAP_LAYOUTS importado de '../config/mapLayouts' com caixas e zonas modulares precisas
 
 interface ActiveMapInstance {
   def: MapDefinition;
@@ -44,23 +31,18 @@ interface ActiveMapInstance {
   fullRawH: number;
 }
 
-interface Rgb {
-  r: number;
-  g: number;
-  b: number;
-}
-
 export class MapManager {
   private scene: Phaser.Scene;
   private obstacleGroup!: Phaser.Physics.Arcade.StaticGroup;
-  private transitionWallZones: Phaser.GameObjects.Zone[] = [];
-  private transitionVisuals: Phaser.GameObjects.GameObject[] = [];
+  private infiniteObstacleZones: Phaser.GameObjects.Zone[] = [];
+
+  // Pool de 9 imagens (Grid 3x3) para cobrir a visão da câmera infinitamente
+  private mapChunks: Phaser.GameObjects.Image[] = [];
+  private chunkWidth = 2048;
+  private chunkHeight = 2048;
 
   private currentMap!: ActiveMapInstance;
-  private pendingNextMap: ActiveMapInstance | null = null;
-  private seamY = 0;
-  private seamOpeningX = 0;
-  private transitionCounter = 0;
+  private currentMapIndex = 0;
   private bossArenaActive = false;
 
   private debugGraphics!: Phaser.GameObjects.Graphics;
@@ -76,54 +58,300 @@ export class MapManager {
       scene.load.image(mapDef.key, mapDef.file);
     }
     scene.load.image(BOSS_MAP_DEFINITION.key, BOSS_MAP_DEFINITION.file);
+
+    // Sprites de cenário e terreno para suavizar emendas e decorar passagens
+    scene.load.image('tex_gramas', 'assets/spritesguias/gramas.jpeg');
+    scene.load.image('tex_arvores', 'assets/spritesguias/arvores.jpeg');
+    scene.load.image('tex_pedras', 'assets/spritesguias/pedras.jpeg');
+    scene.load.image('tex_agua_efeitos', 'assets/spritesguias/spritesaguaeefeitos.jpeg');
+    scene.load.image('tex_cenario', 'assets/spritesguias/spritescenario.jpeg');
+    scene.load.image('tex_construcoes', 'assets/spritesguias/spritescenarioeconstrucoes.jpeg');
   }
 
   init(): void {
     this.obstacleGroup = this.scene.physics.add.staticGroup();
     this.debugGraphics = this.scene.add.graphics().setDepth(DEPTH.DEBUG);
-    this.ensureFillerTextures();
     this.bossArenaActive = false;
+    this.currentMapIndex = 0;
 
-    this.currentMap = this.createMapInstance(
-      MAP_SEQUENCE[0],
-      0,
-      0,
-      0,
-      false,
-      false
-    );
-    this.applySingleMapWorldBounds(this.currentMap);
+    // Inicializa o primeiro mapa em modo Infinito (Seamless 3x3)
+    this.setupInfiniteMap(0);
   }
 
-  
+  // ===================== SISTEMA DE MAPA INFINITO (SEM FLIP & SEM BORDAS DE ÁRVORES) =====================
+
+  private readonly BORDER_TRIM_RATIO = 0.085;
+
+  /**
+   * Gera uma textura limpa em memória recortando as árvores da borda do mapX.jpeg
+   * e suavizando as extremidades com cores de grama/pedra do próprio bioma.
+   */
+  private getOrCreateBorderlessMapTexture(mapIndex: number): string {
+    const def = MAP_SEQUENCE[Phaser.Math.Clamp(mapIndex, 0, MAP_SEQUENCE.length - 1)];
+    const rawKey = def.key;
+    const seamlessKey = `${rawKey}_seamless`;
+
+    if (this.scene.textures.exists(seamlessKey)) {
+      const frame = this.scene.textures.getFrame(seamlessKey);
+      this.chunkWidth = Math.round(frame.width * def.worldScale);
+      this.chunkHeight = Math.round(frame.height * def.worldScale);
+      return seamlessKey;
+    }
+
+    const sourceImg = this.scene.textures.get(rawKey).getSourceImage() as HTMLImageElement;
+    const srcW = sourceImg.width;
+    const srcH = sourceImg.height;
+
+    // Mapas subterrâneos (6 e 7) e cidade (4) usam recorte menor; florestas (1, 2, 3) recortam mais árvores
+    const trimRatio = (mapIndex === 0 || mapIndex === 1 || mapIndex === 2) ? this.BORDER_TRIM_RATIO : 0.055;
+    const trimX = Math.floor(srcW * trimRatio);
+    const trimY = Math.floor(srcH * trimRatio);
+
+    const croppedW = srcW - trimX * 2;
+    const croppedH = srcH - trimY * 2;
+
+    this.chunkWidth = Math.round(croppedW * def.worldScale);
+    this.chunkHeight = Math.round(croppedH * def.worldScale);
+
+    const canvasTex = this.scene.textures.createCanvas(seamlessKey, croppedW, croppedH);
+    if (!canvasTex) return rawKey;
+
+    const ctx = canvasTex.getContext();
+
+    // 1. Desenha apenas o miolo útil do mapa (sem o paredão de árvores das bordas!)
+    ctx.drawImage(
+      sourceImg,
+      trimX,
+      trimY,
+      croppedW,
+      croppedH,
+      0,
+      0,
+      croppedW,
+      croppedH
+    );
+
+    // 2. Suaviza os 24px extremos de cada borda espelhando apenas uma micro-faixa de grama/chão
+    // Isso faz com que a borda esquerda case perfeitamente com a direita sem inverter o mapa!
+    const blendSize = 24;
+
+    // Faixa de transição Horizontal (Direita suave com Esquerda)
+    ctx.save();
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(sourceImg, trimX, trimY, blendSize, croppedH, croppedW - blendSize, 0, blendSize, croppedH);
+    ctx.drawImage(sourceImg, srcW - trimX - blendSize, trimY, blendSize, croppedH, 0, 0, blendSize, croppedH);
+
+    // Faixa de transição Vertical (Topo suave com Base)
+    ctx.drawImage(sourceImg, trimX, trimY, croppedW, blendSize, 0, croppedH - blendSize, croppedW, blendSize);
+    ctx.drawImage(sourceImg, trimX, srcH - trimY - blendSize, croppedW, blendSize, 0, 0, croppedW, blendSize);
+    ctx.restore();
+
+    canvasTex.refresh();
+    return seamlessKey;
+  }
+
+  /**
+   * Remove as colisões de árvores da moldura externa para que a passagem entre
+   * um chunk e outro seja 100% aberta, preservando os obstáculos internos.
+   */
+  private stripOuterBorderCollisions(mapIndex: number): void {
+    const m = this.currentMap;
+    if (!m || !m.cellTypeGrid) return;
+
+    const rows = m.rows;
+    const cols = m.cols;
+
+    const trimRatio = (mapIndex <= 2) ? this.BORDER_TRIM_RATIO : 0.055;
+    const borderRows = Math.max(2, Math.ceil(rows * trimRatio));
+    const borderCols = Math.max(2, Math.ceil(cols * trimRatio));
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const isOuterMargin =
+          r < borderRows ||
+          r >= rows - borderRows ||
+          c < borderCols ||
+          c >= cols - borderCols;
+
+        if (isOuterMargin) {
+          const type = m.cellTypeGrid[r][c];
+          if (type === 'building' || type === 'boundary') {
+            m.cellTypeGrid[r][c] = 'walkable';
+            m.blockedGrid[r][c] = false;
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Inicializa o mapa infinito (Grid 3x3) SEM espelhar os mapas e SEM limites de borda
+   */
+  public setupInfiniteMap(mapIndex: number): void {
+    this.bossArenaActive = false;
+    this.currentMapIndex = Phaser.Math.Clamp(mapIndex, 0, MAP_SEQUENCE.length - 1);
+    this.mapsCleared = this.currentMapIndex;
+    const def = MAP_SEQUENCE[this.currentMapIndex];
+
+    const seamlessKey = this.getOrCreateBorderlessMapTexture(this.currentMapIndex);
+
+    // Limpa mapa anterior se houver
+    if (this.currentMap && this.currentMap.image) {
+      this.currentMap.image.destroy();
+    }
+    this.clearInfiniteObstacles();
+
+    // Cria a instância base com dados de colisão extraídos da imagem JPEG e mapLayouts.json
+    this.currentMap = this.createMapInstance(def, this.currentMapIndex, 0, 0, false, false);
+    this.currentMap.image.setVisible(false);
+
+    // Remove as colisões de árvores da moldura externa na grade
+    this.stripOuterBorderCollisions(this.currentMapIndex);
+
+    // Cria os 9 quadrantes (Grid 3x3) SEM NUNCA ESPELHAR!
+    if (this.mapChunks.length === 0) {
+      for (let i = 0; i < 9; i++) {
+        const img = this.scene.add
+          .image(0, 0, seamlessKey)
+          .setOrigin(0, 0)
+          .setScale(def.worldScale)
+          .setDepth(DEPTH.MAP)
+          .setFlip(false, false); // NUNCA espelha para manter a orientação original 100%!
+        this.mapChunks.push(img);
+      }
+    } else {
+      for (const chunk of this.mapChunks) {
+        chunk.setTexture(seamlessKey);
+        chunk.setScale(def.worldScale);
+        chunk.setFlip(false, false); // Garante orientação original 100% do tempo
+        chunk.setVisible(true);
+      }
+    }
+
+    // Retira completamente os limites físicos e de câmera para o mapa infinito
+    this.scene.physics.world.setBounds(-10000000, -10000000, 20000000, 20000000);
+    this.scene.cameras.main.removeBounds();
+
+    const spawn = this.getInitialSpawnPoint();
+    this.update(spawn.x, spawn.y);
+  }
+
+  /**
+   * Atualiza a posição dos 9 quadrantes ao redor do jogador (Sem Flip!)
+   */
+  public update(playerX: number, playerY: number): void {
+    if (this.bossArenaActive || this.mapChunks.length === 0) return;
+
+    const centerChunkX = Math.floor(playerX / this.chunkWidth);
+    const centerChunkY = Math.floor(playerY / this.chunkHeight);
+
+    let index = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const cx = centerChunkX + dx;
+        const cy = centerChunkY + dy;
+
+        const chunk = this.mapChunks[index++];
+        chunk.setPosition(cx * this.chunkWidth, cy * this.chunkHeight);
+        chunk.setFlip(false, false); // Mantém todos os lados na direção correta
+      }
+    }
+  }
+
+  private clearInfiniteObstacles(): void {
+    for (const zone of this.infiniteObstacleZones) {
+      if (zone.body) {
+        this.scene.physics.world.remove(zone.body as Phaser.Physics.Arcade.StaticBody);
+      }
+      this.obstacleGroup.remove(zone, true, true);
+    }
+    this.infiniteObstacleZones = [];
+    this.obstacleGroup.refresh();
+  }
+
+  // ===================== CONSULTAS DE TERRENO =====================
+
+  /**
+   * Lê o tipo de terreno no mapLayouts.json em qualquer coordenada positiva ou negativa
+   * do mapa infinito, compensando o recorte das árvores da borda e sem inversão de eixo.
+   */
   public getCellTypeAt(worldX: number, worldY: number): MapCellType {
-    const checkMap = (m: ActiveMapInstance | null): MapCellType | null => {
-      if (!m) return null;
+    if (this.bossArenaActive) {
+      const m = this.currentMap;
+      if (!m) return 'boundary';
       if (
         worldX < m.x ||
         worldX >= m.x + m.width ||
         worldY < m.y ||
         worldY >= m.y + m.height
       ) {
-        return null;
+        return 'boundary';
       }
       const c = Math.floor((worldX - m.x) / m.cellSize);
       const r = Math.floor((worldY - m.y) / m.cellSize);
       if (r >= 0 && r < m.rows && c >= 0 && c < m.cols) {
         return m.cellTypeGrid?.[r]?.[c] ?? 'walkable';
       }
-      return null;
-    };
+      return 'boundary';
+    }
 
-    const cur = checkMap(this.currentMap);
-    if (cur !== null) return cur;
-    const nxt = checkMap(this.pendingNextMap);
-    if (nxt !== null) return nxt;
-    return 'boundary';
+    const m = this.currentMap;
+    if (!m) return 'walkable';
+
+    // Coordenada normalizada (0.0 a 1.0) sempre na orientação original (sem espelhar!)
+    const localU = (((worldX % this.chunkWidth) + this.chunkWidth) % this.chunkWidth) / this.chunkWidth;
+    const localV = (((worldY % this.chunkHeight) + this.chunkHeight) % this.chunkHeight) / this.chunkHeight;
+
+    // Mapeia para a área interna do grid (compensando a moldura de árvores recortada)
+    const trimRatio = (this.currentMapIndex <= 2) ? this.BORDER_TRIM_RATIO : 0.055;
+    const mappedU = trimRatio + localU * (1 - trimRatio * 2);
+    const mappedV = trimRatio + localV * (1 - trimRatio * 2);
+
+    const col = Phaser.Math.Clamp(Math.floor(mappedU * m.cols), 0, m.cols - 1);
+    const row = Phaser.Math.Clamp(Math.floor(mappedV * m.rows), 0, m.rows - 1);
+
+    return m.cellTypeGrid?.[row]?.[col] ?? 'walkable';
   }
 
-  public update(_delta: number): void {
-    // MapManager frame update
+  /**
+   * Verifica se a coordenada (worldX, worldY) bloqueia o movimento físico do Pokémon atual.
+   */
+  public isTerrainBlocked(
+    worldX: number,
+    worldY: number,
+    player?: { canSwim(): boolean; canFly(): boolean }
+  ): boolean {
+    if (this.bossArenaActive) {
+      return this.isOutOfArenaBounds(worldX, worldY);
+    }
+
+    if (player?.canFly()) {
+      return false;
+    }
+
+    const tile = this.getCellTypeAt(worldX, worldY);
+
+    if (tile === 'water') {
+      return !player?.canSwim();
+    }
+
+    if (tile === 'building' || tile === 'boundary') {
+      return true;
+    }
+
+    return false;
+  }
+
+  public isOutOfArenaBounds(worldX: number, worldY: number): boolean {
+    if (!this.bossArenaActive || !this.currentMap) return false;
+    const m = this.currentMap;
+    const margin = 48;
+    return (
+      worldX < m.x + margin ||
+      worldX > m.x + m.width - margin ||
+      worldY < m.y + margin ||
+      worldY > m.y + m.height - margin
+    );
   }
 
   public isWaterAt(worldX: number, worldY: number): boolean {
@@ -134,7 +362,7 @@ export class MapManager {
     return this.getCellTypeAt(worldX, worldY) === 'building';
   }
 
-  getObstaclesGroup(): Phaser.Physics.Arcade.StaticGroup {
+    getObstaclesGroup(): Phaser.Physics.Arcade.StaticGroup {
     return this.obstacleGroup;
   }
 
@@ -152,58 +380,35 @@ export class MapManager {
   }
 
   getInitialSpawnPoint(): { x: number; y: number } {
-    const m = this.currentMap;
-    return this.findNearestWalkablePosition(
-      m.x + m.width * m.def.initialSpawnNorm.x,
-      m.y + m.height * m.def.initialSpawnNorm.y
-    );
+    const rawX = this.chunkWidth * 0.5;
+    const rawY = this.chunkHeight * 0.5;
+    return this.findNearestWalkablePosition(rawX, rawY);
   }
 
-  isNextMapGateOpen(): boolean {
-    return this.pendingNextMap !== null;
-  }
-
-  /** Ponto que a bússola deve indicar durante a transição pela pontezinha */
-  getTransitionTarget(playerY: number): {
-    x: number;
-    y: number;
-    passedSeam: boolean;
-  } {
-    const passedSeam = playerY < this.seamY;
-    return {
-      x: this.seamOpeningX,
-      y: passedSeam ? this.seamY - ENTRY_DISTANCE_PAST_SEAM : this.seamY + 10,
-      passedSeam,
-    };
+  public switchToMap(mapIndex: number): MapDefinition {
+    this.setupInfiniteMap(mapIndex);
+    return this.currentMap.def;
   }
 
   // ===================== TELEPORTE PARA ARENA BOSS (MAP5-BOSS) =====================
 
   /**
    * Teleporta o jogador imediatamente para o map5-BOSS (Ginásio de Pedra do Onix),
-   * confinando a área caminhável exclusivamente à arena central da Pokébola.
+   * desativando os chunks infinitos e confinando a área caminhável exclusivamente à arena central da Pokébola.
    */
   teleportToBossArena(): {
     playerSpawn: { x: number; y: number };
     bossSpawn: { x: number; y: number };
   } {
     this.bossArenaActive = true;
-    this.clearTransitionWalls();
 
-    if (this.pendingNextMap) {
-      this.destroyMapObstacles(this.pendingNextMap);
-      this.pendingNextMap.image.destroy();
-      this.pendingNextMap.pixels = new Uint8ClampedArray(0);
-      this.pendingNextMap = null;
+    // Oculta os chunks infinitos
+    for (const chunk of this.mapChunks) {
+      chunk.setVisible(false);
     }
+    this.clearInfiniteObstacles();
 
-    for (const v of this.transitionVisuals) {
-      v.destroy();
-    }
-    this.transitionVisuals = [];
-
-    if (this.currentMap) {
-      this.destroyMapObstacles(this.currentMap);
+    if (this.currentMap && this.currentMap.image) {
       this.currentMap.image.destroy();
       this.currentMap.pixels = new Uint8ClampedArray(0);
     }
@@ -217,8 +422,13 @@ export class MapManager {
       false
     );
     this.currentMap = bossMap;
-    this.applySingleMapWorldBounds(bossMap);
-    this.renderDebugGrid();
+    this.currentMap.image.setVisible(true);
+
+    // Constrói os limites fechados da arena do boss
+    this.scene.physics.world.setBounds(bossMap.x, bossMap.y, bossMap.width, bossMap.height);
+    this.scene.cameras.main.setBounds(bossMap.x, bossMap.y, bossMap.width, bossMap.height);
+
+    this.buildStaticZonesForMap(bossMap);
 
     const playerSpawn = this.findNearestWalkablePosition(
       bossMap.x + bossMap.width * 0.5,
@@ -245,500 +455,6 @@ export class MapManager {
     return { playerSpawn, bossSpawn };
   }
 
-  // ===================== TRANSIÇÃO CONECTADA COM PONTEZINHA =====================
-
-  spawnNextConnectedMap(): MapDefinition {
-    if (this.pendingNextMap) return this.pendingNextMap.def;
-
-    const curr = this.currentMap;
-    const nextIndex = (curr.index + 1) % MAP_SEQUENCE.length;
-    const nextDef = MAP_SEQUENCE[nextIndex];
-    const tex = this.scene.textures
-      .get(nextDef.key)
-      .getSourceImage() as HTMLImageElement;
-
-    const cropRatio = nextDef.southCropNormY ?? 1.0;
-    const nextRawH = Math.round(tex.height * cropRatio);
-    const nextW = Math.round(tex.width * nextDef.worldScale);
-    const nextH = Math.round(nextRawH * nextDef.worldScale);
-
-    this.seamOpeningX = Math.round(
-      curr.x + curr.width * curr.def.northExitNormX
-    );
-    this.seamY = curr.y;
-
-    const nextX = Math.round(
-      this.seamOpeningX - nextW * nextDef.southEntranceNormX
-    );
-    const nextY = Math.round(curr.y - nextH);
-
-    this.openNorthExitOnMap(curr);
-    const next = this.createMapInstance(
-      nextDef,
-      nextIndex,
-      nextX,
-      nextY,
-      true,
-      false
-    );
-    this.pendingNextMap = next;
-
-    const union = this.unionBounds(curr, next);
-    this.scene.physics.world.setBounds(union.x, union.y, union.w, union.h);
-    this.scene.cameras.main.setBounds(union.x, union.y, union.w, union.h);
-
-    this.transitionCounter++;
-    this.buildFillerBackground(curr, next, union);
-    this.buildSeamBlend(curr, next, union);
-    this.buildSeamBridge();
-    this.buildTransitionWalls(curr, next, union);
-
-    // Revela o novo mapa e a pontezinha suavemente
-    const fadeTargets = [next.image, ...this.transitionVisuals];
-    fadeTargets.forEach((obj) =>
-      (obj as unknown as Phaser.GameObjects.Components.Alpha).setAlpha(0)
-    );
-    this.scene.tweens.add({
-      targets: fadeTargets,
-      alpha: 1,
-      duration: 1200,
-      ease: 'Sine.easeInOut',
-    });
-
-    this.renderDebugGrid();
-    return nextDef;
-  }
-
-  /**
-   * Finaliza a transição quando o jogador atravessa a pontezinha e avança pelo novo mapa.
-   */
-  checkPlayerEnteredNextMap(
-    _playerX: number,
-    playerY: number
-  ): MapDefinition | null {
-    if (!this.pendingNextMap) return null;
-    if (playerY > this.seamY - ENTRY_DISTANCE_PAST_SEAM) return null;
-
-    const oldMap = this.currentMap;
-    const newMap = this.pendingNextMap;
-    this.pendingNextMap = null;
-    this.currentMap = newMap;
-    this.mapsCleared++;
-
-    this.clearTransitionWalls();
-    this.destroyMapObstacles(oldMap);
-
-    this.scene.physics.world.setBounds(
-      newMap.x,
-      newMap.y,
-      newMap.width,
-      newMap.height
-    );
-    this.tweenCameraBoundsTo(newMap);
-
-    const visuals = this.transitionVisuals;
-    this.transitionVisuals = [];
-    this.scene.tweens.add({
-      targets: [oldMap.image, ...visuals],
-      alpha: 0,
-      duration: 500,
-      onComplete: () => {
-        oldMap.image.destroy();
-        visuals.forEach((v) => v.destroy());
-        oldMap.pixels = new Uint8ClampedArray(0);
-      },
-    });
-
-    this.renderDebugGrid();
-    return newMap.def;
-  }
-
-  private unionBounds(a: ActiveMapInstance, b: ActiveMapInstance) {
-    const x = Math.min(a.x, b.x);
-    const y = Math.min(a.y, b.y);
-    const maxX = Math.max(a.x + a.width, b.x + b.width);
-    const maxY = Math.max(a.y + a.height, b.y + b.height);
-    return { x, y, w: maxX - x, h: maxY - y };
-  }
-
-  private tweenCameraBoundsTo(m: ActiveMapInstance): void {
-    const cam = this.scene.cameras.main;
-    const from = cam.getBounds();
-    const proxy = { x: from.x, y: from.y, w: from.width, h: from.height };
-    this.scene.tweens.add({
-      targets: proxy,
-      x: m.x,
-      y: m.y,
-      w: m.width,
-      h: m.height,
-      duration: 900,
-      ease: 'Sine.easeInOut',
-      onUpdate: () => cam.setBounds(proxy.x, proxy.y, proxy.w, proxy.h),
-    });
-  }
-
-  private buildFillerBackground(
-    curr: ActiveMapInstance,
-    next: ActiveMapInstance,
-    union: { x: number; y: number; w: number; h: number }
-  ): void {
-    const margin = 400;
-    const lowerKey = curr.def.theme === 'cave' ? 'filler-cave' : 'filler-forest';
-    const upperKey = next.def.theme === 'cave' ? 'filler-cave' : 'filler-forest';
-
-    const upper = this.scene.add
-      .tileSprite(
-        union.x - margin,
-        union.y - margin,
-        union.w + margin * 2,
-        this.seamY - union.y + margin,
-        upperKey
-      )
-      .setOrigin(0, 0)
-      .setDepth(DEPTH.FILLER);
-    const lower = this.scene.add
-      .tileSprite(
-        union.x - margin,
-        this.seamY,
-        union.w + margin * 2,
-        union.y + union.h - this.seamY + margin,
-        lowerKey
-      )
-      .setOrigin(0, 0)
-      .setDepth(DEPTH.FILLER);
-
-    this.transitionVisuals.push(upper, lower);
-  }
-
-  private buildSeamBlend(
-    curr: ActiveMapInstance,
-    next: ActiveMapInstance,
-    union: { x: number; y: number; w: number; h: number }
-  ): void {
-    const width = Math.ceil(union.w);
-    const height = SEAM_BLEND_HEIGHT;
-    const step = 6;
-    const columns = Math.ceil(width / step);
-
-    const fillerTop =
-      next.def.theme === 'cave'
-        ? { r: 110, g: 66, b: 60 }
-        : { r: 47, g: 107, b: 42 };
-    const fillerBottom =
-      curr.def.theme === 'cave'
-        ? { r: 110, g: 66, b: 60 }
-        : { r: 47, g: 107, b: 42 };
-
-    const topColors: Rgb[] = [];
-    const bottomColors: Rgb[] = [];
-    for (let i = 0; i < columns; i++) {
-      const worldX = union.x + i * step + step / 2;
-      topColors.push(this.sampleEdgeColor(next, worldX, 'bottom') ?? fillerTop);
-      bottomColors.push(this.sampleEdgeColor(curr, worldX, 'top') ?? fillerBottom);
-    }
-    const smoothTop = this.smoothColors(topColors, 4);
-    const smoothBottom = this.smoothColors(bottomColors, 4);
-
-    const key = `seam-blend-${this.transitionCounter}`;
-    if (this.scene.textures.exists(key)) this.scene.textures.remove(key);
-    const canvasTex = this.scene.textures.createCanvas(key, width, height)!;
-    const ctx = canvasTex.getContext();
-
-    for (let i = 0; i < columns; i++) {
-      const t = smoothTop[i];
-      const b = smoothBottom[i];
-      const mid = {
-        r: Math.round((t.r + b.r) / 2),
-        g: Math.round((t.g + b.g) / 2),
-        b: Math.round((t.b + b.b) / 2),
-      };
-      const grad = ctx.createLinearGradient(0, 0, 0, height);
-      grad.addColorStop(0, `rgba(${t.r},${t.g},${t.b},0)`);
-      grad.addColorStop(0.32, `rgba(${t.r},${t.g},${t.b},0.92)`);
-      grad.addColorStop(0.5, `rgba(${mid.r},${mid.g},${mid.b},1)`);
-      grad.addColorStop(0.68, `rgba(${b.r},${b.g},${b.b},0.92)`);
-      grad.addColorStop(1, `rgba(${b.r},${b.g},${b.b},0)`);
-      ctx.fillStyle = grad;
-      ctx.fillRect(i * step, 0, step + 1, height);
-    }
-
-    canvasTex.refresh();
-
-    const blend = this.scene.add
-      .image(union.x, this.seamY - height / 2, key)
-      .setOrigin(0, 0)
-      .setDepth(DEPTH.SEAM_BLEND);
-    this.transitionVisuals.push(blend);
-  }
-
-  /**
-   * Pontezinha de madeira clássica (com tábuas horizontais, corrimãos laterais e pilares)
-   * que conecta visualmente a saída norte do mapa atual à entrada sul do próximo mapa.
-   */
-  private buildSeamBridge(): void {
-    const key = `seam-bridge-${this.transitionCounter}`;
-    if (this.scene.textures.exists(key)) this.scene.textures.remove(key);
-
-    const w = GAP_HALF_WIDTH * 2 + 28;
-    const h = SEAM_BRIDGE_HEIGHT;
-    const canvasTex = this.scene.textures.createCanvas(key, w, h)!;
-    const ctx = canvasTex.getContext();
-
-    const bridgeLeft = 14;
-    const bridgeRight = w - 14;
-    const bridgeW = bridgeRight - bridgeLeft;
-
-    // Rampa de terra/pedra suave nas extremidades da ponte
-    const approachGrad = ctx.createLinearGradient(0, 0, 0, h);
-    approachGrad.addColorStop(0, 'rgba(218, 196, 136, 0)');
-    approachGrad.addColorStop(0.14, 'rgba(218, 196, 136, 0.92)');
-    approachGrad.addColorStop(0.86, 'rgba(218, 196, 136, 0.92)');
-    approachGrad.addColorStop(1, 'rgba(218, 196, 136, 0)');
-    ctx.fillStyle = approachGrad;
-    ctx.fillRect(bridgeLeft + 4, 0, bridgeW - 8, h);
-
-    // Estrutura principal da pontezinha de madeira
-    const deckTop = Math.round(h * 0.14);
-    const deckBottom = Math.round(h * 0.86);
-    const deckH = deckBottom - deckTop;
-
-    // Sombra abaixo da ponte
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.42)';
-    ctx.fillRect(bridgeLeft - 4, deckTop + 4, bridgeW + 8, deckH);
-
-    // Base escura de madeira (vigas longitudinais)
-    ctx.fillStyle = '#4a2c16';
-    ctx.fillRect(bridgeLeft, deckTop, bridgeW, deckH);
-
-    // Tábuas horizontais da ponte
-    const plankHeight = 14;
-    const plankGap = 3;
-    let idx = 0;
-    for (
-      let py = deckTop + 4;
-      py <= deckBottom - plankHeight - 2;
-      py += plankHeight + plankGap
-    ) {
-      const isEven = idx % 2 === 0;
-      ctx.fillStyle = isEven ? '#9c6634' : '#8b572a';
-      ctx.fillRect(bridgeLeft + 8, py, bridgeW - 16, plankHeight);
-
-      // Brilho superior da tábua
-      ctx.fillStyle = '#b87d46';
-      ctx.fillRect(bridgeLeft + 8, py, bridgeW - 16, 3);
-
-      // Sombra inferior da tábua
-      ctx.fillStyle = '#5c381c';
-      ctx.fillRect(bridgeLeft + 8, py + plankHeight - 2, bridgeW - 16, 2);
-
-      // Pregos laterais nas tábuas
-      ctx.fillStyle = '#2b180a';
-      ctx.fillRect(bridgeLeft + 13, py + 5, 3, 3);
-      ctx.fillRect(bridgeRight - 16, py + 5, 3, 3);
-      idx++;
-    }
-
-    // Corrimãos laterais de madeira (esquerdo e direito)
-    const railW = 9;
-    ctx.fillStyle = '#6d411f';
-    ctx.fillRect(bridgeLeft, deckTop, railW, deckH);
-    ctx.fillRect(bridgeRight - railW, deckTop, railW, deckH);
-
-    ctx.fillStyle = '#c48a52';
-    ctx.fillRect(bridgeLeft + 2, deckTop, 3, deckH);
-    ctx.fillRect(bridgeRight - railW + 2, deckTop, 3, deckH);
-
-    // Pilares de madeira ao longo do corrimão
-    const postCount = 6;
-    for (let i = 0; i < postCount; i++) {
-      const postY =
-        deckTop + Math.round((i / (postCount - 1)) * (deckH - 14));
-      for (const px of [bridgeLeft - 2, bridgeRight - railW - 1]) {
-        ctx.fillStyle = '#3b210f';
-        ctx.fillRect(px, postY, railW + 3, 14);
-        ctx.fillStyle = '#d69e66';
-        ctx.fillRect(px + 2, postY + 2, railW - 1, 9);
-      }
-    }
-
-    canvasTex.refresh();
-
-    const bridge = this.scene.add
-      .image(this.seamOpeningX, this.seamY, key)
-      .setOrigin(0.5, 0.5)
-      .setDepth(DEPTH.SEAM_PATH);
-    this.transitionVisuals.push(bridge);
-  }
-
-  /** Paredes invisíveis: laterais da pontezinha e áreas fora dos dois mapas */
-  private buildTransitionWalls(
-    curr: ActiveMapInstance,
-    next: ActiveMapInstance,
-    union: { x: number; y: number; w: number; h: number }
-  ): void {
-    this.clearTransitionWalls();
-    const unionMaxX = union.x + union.w;
-    const addWall = (x: number, y: number, w: number, h: number) => {
-      if (w <= 0 || h <= 0) return;
-      const z = this.scene.add.zone(x + w / 2, y + h / 2, w, h);
-z.setData('obstacleType', 'boundary');
-      this.scene.physics.add.existing(z, true);
-      this.obstacleGroup.add(z);
-      this.transitionWallZones.push(z);
-    };
-
-    // Bloqueia toda a faixa da emenda exceto a abertura da pontezinha
-    addWall(
-      union.x,
-      this.seamY - 24,
-      this.seamOpeningX - GAP_HALF_WIDTH - union.x,
-      48
-    );
-    addWall(
-      this.seamOpeningX + GAP_HALF_WIDTH,
-      this.seamY - 24,
-      unionMaxX - this.seamOpeningX - GAP_HALF_WIDTH,
-      48
-    );
-
-    // Corrimãos físicos da pontezinha para ninguém cair pelas laterais da ponte
-    const bridgeHalfH = Math.round(SEAM_BRIDGE_HEIGHT * 0.36);
-    addWall(
-      this.seamOpeningX - GAP_HALF_WIDTH - 24,
-      this.seamY - bridgeHalfH,
-      24,
-      bridgeHalfH * 2
-    );
-    addWall(
-      this.seamOpeningX + GAP_HALF_WIDTH,
-      this.seamY - bridgeHalfH,
-      24,
-      bridgeHalfH * 2
-    );
-
-    // Laterais fora de cada mapa
-    for (const m of [curr, next]) {
-      addWall(union.x, m.y, m.x - union.x, m.height);
-      addWall(m.x + m.width, m.y, unionMaxX - (m.x + m.width), m.height);
-    }
-    this.obstacleGroup.refresh();
-  }
-
-  private clearTransitionWalls(): void {
-    for (const z of this.transitionWallZones) {
-      if (z.body) {
-        this.scene.physics.world.remove(
-          z.body as Phaser.Physics.Arcade.StaticBody
-        );
-      }
-      this.obstacleGroup.remove(z, true, true);
-    }
-    this.transitionWallZones = [];
-    this.obstacleGroup.refresh();
-  }
-
-  private sampleEdgeColor(
-    m: ActiveMapInstance,
-    worldX: number,
-    edge: 'top' | 'bottom'
-  ): Rgb | null {
-    if (worldX < m.x || worldX >= m.x + m.width || m.pixels.length === 0) {
-      return null;
-    }
-    const rawX = Math.floor((worldX - m.x) / m.def.worldScale);
-    const rows = 14;
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    let n = 0;
-    for (let dy = 0; dy < rows; dy++) {
-      const rawY = edge === 'top' ? dy : m.rawH - 1 - dy;
-      for (let dx = -3; dx <= 3; dx++) {
-        const x = Phaser.Math.Clamp(rawX + dx, 0, m.rawW - 1);
-        const idx = (rawY * m.rawW + x) * 4;
-        r += m.pixels[idx];
-        g += m.pixels[idx + 1];
-        b += m.pixels[idx + 2];
-        n++;
-      }
-    }
-    return {
-      r: Math.round(r / n),
-      g: Math.round(g / n),
-      b: Math.round(b / n),
-    };
-  }
-
-  private smoothColors(colors: Rgb[], radius: number): Rgb[] {
-    return colors.map((_, i) => {
-      let r = 0;
-      let g = 0;
-      let b = 0;
-      let n = 0;
-      for (let k = -radius; k <= radius; k++) {
-        const c = colors[Phaser.Math.Clamp(i + k, 0, colors.length - 1)];
-        r += c.r;
-        g += c.g;
-        b += c.b;
-        n++;
-      }
-      return {
-        r: Math.round(r / n),
-        g: Math.round(g / n),
-        b: Math.round(b / n),
-      };
-    });
-  }
-
-  private ensureFillerTextures(): void {
-    if (!this.scene.textures.exists('filler-forest')) {
-      const g = this.scene.make.graphics({ x: 0, y: 0 }, false);
-      g.fillStyle(0x2a5f26, 1);
-      g.fillRect(0, 0, 96, 96);
-      const crowns = [
-        [16, 18, 18],
-        [62, 14, 20],
-        [40, 50, 22],
-        [84, 56, 18],
-        [12, 78, 18],
-        [62, 88, 17],
-      ];
-      for (const [x, y, r] of crowns) {
-        g.fillStyle(0x1f4a1c, 1);
-        g.fillCircle(x + 3, y + 4, r);
-        g.fillStyle(0x3f8f36, 1);
-        g.fillCircle(x, y, r);
-        g.fillStyle(0x5fb14a, 1);
-        g.fillCircle(x - r * 0.3, y - r * 0.3, r * 0.45);
-      }
-      g.generateTexture('filler-forest', 96, 96);
-      g.destroy();
-    }
-
-    if (!this.scene.textures.exists('filler-cave')) {
-      const g = this.scene.make.graphics({ x: 0, y: 0 }, false);
-      g.fillStyle(0x6e423c, 1);
-      g.fillRect(0, 0, 96, 96);
-      const rocks = [
-        [20, 20, 18],
-        [70, 22, 16],
-        [44, 60, 20],
-        [86, 74, 14],
-        [12, 82, 14],
-      ];
-      for (const [x, y, r] of rocks) {
-        g.fillStyle(0x4f2e2a, 1);
-        g.fillCircle(x + 3, y + 4, r);
-        g.fillStyle(0x8a5a50, 1);
-        g.fillCircle(x, y, r);
-        g.fillStyle(0xa87466, 1);
-        g.fillCircle(x - r * 0.3, y - r * 0.35, r * 0.4);
-      }
-      g.generateTexture('filler-cave', 96, 96);
-      g.destroy();
-    }
-  }
-
   // ===================== DEBUG / SPAWN SEGURO =====================
 
   toggleDebug(): boolean {
@@ -748,108 +464,29 @@ z.setData('obstacleType', 'boundary');
   }
 
   /**
-   * Busca por BFS a posição caminhável mais próxima que tenha uma vizinhança 3x3
-   * inteiramente livre de árvores, casas, paredes, pedras e rios.
+   * Busca por proximidade a posição caminhável mais próxima.
    */
   findNearestWalkablePosition(
     worldX: number,
-    worldY: number
+    worldY: number,
+    player?: { canSwim(): boolean; canFly(): boolean }
   ): { x: number; y: number } {
-    const m = this.currentMap;
-    const startCol = Phaser.Math.Clamp(
-      Math.floor((worldX - m.x) / m.cellSize),
-      2,
-      Math.max(2, m.cols - 3)
-    );
-    const startRow = Phaser.Math.Clamp(
-      Math.floor((worldY - m.y) / m.cellSize),
-      2,
-      Math.max(2, m.rows - 3)
-    );
-
-    const toWorld = (r: number, c: number) => ({
-      x: m.x + c * m.cellSize + m.cellSize / 2,
-      y: m.y + r * m.cellSize + m.cellSize / 2,
-    });
-
-    if (this.isCellAndNeighborsWalkable(m, startRow, startCol)) {
-      return toWorld(startRow, startCol);
+    if (!this.isTerrainBlocked(worldX, worldY, player)) {
+      return { x: worldX, y: worldY };
     }
 
-    const visited = new Set<string>([`${startRow},${startCol}`]);
-    const queue: Array<[number, number]> = [[startRow, startCol]];
-    const dirs = [
-      [0, 1],
-      [0, -1],
-      [1, 0],
-      [-1, 0],
-      [1, 1],
-      [1, -1],
-      [-1, 1],
-      [-1, -1],
-    ];
-
-    while (queue.length > 0) {
-      const [r, c] = queue.shift()!;
-      if (this.isCellAndNeighborsWalkable(m, r, c)) return toWorld(r, c);
-      for (const [dr, dc] of dirs) {
-        const nr = r + dr;
-        const nc = c + dc;
-        if (nr >= 2 && nr < m.rows - 2 && nc >= 2 && nc < m.cols - 2) {
-          const key = `${nr},${nc}`;
-          if (!visited.has(key)) {
-            visited.add(key);
-            queue.push([nr, nc]);
-          }
+    const step = 28;
+    for (let r = 1; r <= 10; r++) {
+      for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 6) {
+        const nx = worldX + Math.cos(angle) * (r * step);
+        const ny = worldY + Math.sin(angle) * (r * step);
+        if (!this.isTerrainBlocked(nx, ny, player)) {
+          return { x: nx, y: ny };
         }
       }
     }
 
-    return {
-      x: m.x + m.width * m.def.initialSpawnNorm.x,
-      y: m.y + m.height * m.def.initialSpawnNorm.y,
-    };
-  }
-
-  /**
-   * Verifica se a célula é caminhável e possui folga adequada para o corpo do jogador/inimigo.
-   */
-  private isCellAndNeighborsWalkable(
-    m: ActiveMapInstance,
-    row: number,
-    col: number
-  ): boolean {
-    if (row < 1 || row >= m.rows - 1 || col < 1 || col >= m.cols - 1) {
-      return false;
-    }
-    if (m.blockedGrid[row]?.[col]) {
-      return false;
-    }
-
-    let freeNeighbors = 0;
-    const dirs = [
-      [-1, 0],
-      [1, 0],
-      [0, -1],
-      [0, 1],
-      [-1, -1],
-      [-1, 1],
-      [1, -1],
-      [1, 1],
-    ];
-    for (const [dr, dc] of dirs) {
-      const r = row + dr;
-      const c = col + dc;
-      if (!m.blockedGrid[r]?.[c]) {
-        freeNeighbors++;
-      }
-    }
-    return freeNeighbors >= 4;
-  }
-
-  private applySingleMapWorldBounds(m: ActiveMapInstance): void {
-    this.scene.physics.world.setBounds(m.x, m.y, m.width, m.height);
-    this.scene.cameras.main.setBounds(m.x, m.y, m.width, m.height);
+    return { x: worldX, y: worldY };
   }
 
   // ===================== CRIAÇÃO DO MAPA / COLISÕES =====================
@@ -922,22 +559,10 @@ z.setData('obstacleType', 'boundary');
       fullRawH,
     };
 
-    this.buildStaticZonesForMap(instance);
     return instance;
   }
 
-  private openNorthExitOnMap(m: ActiveMapInstance): void {
-    const exitCol = Math.floor(m.cols * m.def.northExitNormX);
-    for (let r = 0; r < Math.min(16, m.rows); r++) {
-      for (let c = exitCol - 3; c <= exitCol + 3; c++) {
-        if (c >= 1 && c < m.cols - 1) { m.blockedGrid[r][c] = false; m.cellTypeGrid[r][c] = 'walkable'; }
-      }
-    }
-    this.destroyMapObstacles(m);
-    this.buildStaticZonesForMap(m);
-  }
-
-    private computeCleanCollisionGrid(
+  private computeCleanCollisionGrid(
     data: Uint8ClampedArray,
     rawW: number,
     rawH: number,
@@ -991,14 +616,10 @@ z.setData('obstacleType', 'boundary');
 
     const cellTypeGrid: MapCellType[][] = Array.from({ length: rows }, (_, r) =>
       Array.from({ length: cols }, (__, c) => {
-        if (c <= 0 || c >= cols - 1) return 'boundary';
-        if (r <= 0 && !openNorthExit) return 'boundary';
-        if (r >= rows - 1 && !openSouthEntrance) return 'boundary';
-
         const normX = ((c + 0.5) * RAW_CELL_SIZE) / rawW;
         const normY = ((r + 0.5) * RAW_CELL_SIZE) / rawH;
 
-        // 1. Pontes, píeres e escadas registradas são 100% livres para caminhar (SEM bodyblock)
+        // 1. Pontes, píeres e escadas registradas são 100% livres para caminhar
         for (const bridge of bridgeZones) {
           if (isInsideBox(normX, normY, bridge)) {
             return 'walkable';
@@ -1010,34 +631,28 @@ z.setData('obstacleType', 'boundary');
           }
         }
 
-        // 2. Construções, cercas, estátuas e árvores grandes (bloqueiam terrestres/aquáticos, voadores passam!)
+        // 2. Construções, cercas e árvores grandes
         for (const box of solidBoxes) {
           if (isInsideBox(normX, normY, box)) {
             return 'building';
           }
         }
 
-        // 3. Paredes de caverna e falésias íngremes sem escada (bloqueiam todos)
+        // 3. Paredes de caverna e falésias íngremes
         for (const bnd of boundaryBoxes) {
           if (isInsideBox(normX, normY, bnd)) {
             return 'boundary';
           }
         }
 
-        // 4. Lagos, rios e mares (pokémons de água nadam, voadores voam, outros bloqueiam)
+        // 4. Lagos, rios e mares
         for (const water of waterZones) {
           if (isInsideBox(normX, normY, water)) {
             return 'water';
           }
         }
 
-        // 5. Perímetro extremo do mapa (2 tiles de margem externa)
-        if (c <= 1 || c >= cols - 2 || r <= 1 || r >= rows - 2) {
-          return 'boundary';
-        }
-
-        // 6. Se o layout é determinístico (gerado com coordenadas exatas 1:1), todo o restante
-        // (gramas, grama alta, flores, caminhos, praias, piso de caverna) é 100% caminhável!
+        // 5. Se o layout é determinístico, todo o restante é 100% livre
         if (isDeterministic) {
           return 'walkable';
         }
@@ -1075,23 +690,13 @@ z.setData('obstacleType', 'boundary');
     return { blockedGrid, cellTypeGrid };
   }
 
-  /**
-   * Detecção pr  /**
-   * Detecção precisa e revisada de células do mapa:
-   * - Gramas de todos os tons, flores de qualquer cor, caminhos (terra, areia, cascalho, calçadas)
-   *   e escadas (madeira, pedra de falésia) são 100% LIVRES para caminhar (SEM blockguard)!
-   * - Árvores grandes (apenas copas/troncos densos) e construções possuem bodyblock para pokémons terrestres,
-   *   mas pokémons voadores voam livremente por cima.
-   * - Rios e lagos: pokémons do tipo água nadam (com animação), voadores voam, outros bloqueiam.
-   * - Penhascos verticais e bordas extremas: boundary (bloqueia todos).
-   */
   private classifyRawCell(
     data: Uint8ClampedArray,
     imgW: number,
     imgH: number,
     startX: number,
     startY: number,
-    theme: 'forest' | 'cave' | 'boss'
+    theme: string
   ): MapCellType {
     let water = 0;
     let tree = 0;
@@ -1111,14 +716,14 @@ z.setData('obstacleType', 'boundary');
         const b = data[idx + 2];
         total++;
 
-        // 1. Rios, lagos e corpos d'água (azul claramente predominante)
+        // Rios, lagos e corpos d'água
         if (b > r + 35 && b > g + 15 && b >= 125) {
           water++;
           continue;
         }
 
-        // 2. Tema de Caverna (map6, map7)
-        if (theme === 'cave') {
+        // Tema de Caverna
+        if (theme === 'cave' || theme === 'temple_cave') {
           const isCaveFloor =
             (r >= 95 && g >= 90 && b >= 65 && Math.abs(r - g) <= 40) ||
             (r >= 155 && g >= 140 && b >= 75) ||
@@ -1136,21 +741,19 @@ z.setData('obstacleType', 'boundary');
           }
         }
 
-        // 3. FLORES DE TODAS AS CORES (vermelhas, amarelas, azuis, rosas, brancas)
-        // Devem ser 100% livres para caminhar (SEM blockguard)
+        // Flores
         const isFlower =
-          (r > 155 && r > g + 18) || // Vermelha / magenta / rosa
-          (r > 165 && g > 140 && b < 130) || // Amarela / alaranjada
-          (b > 155 && b > r + 25) || // Azul / ciano / lilás
-          (r > 195 && g > 195 && b > 185); // Branca / creme claro
+          (r > 155 && r > g + 18) ||
+          (r > 165 && g > 140 && b < 130) ||
+          (b > 155 && b > r + 25) ||
+          (r > 195 && g > 195 && b > 185);
 
         if (isFlower) {
           walkable++;
           continue;
         }
 
-        // 4. GRAMAS DE TODOS OS TONS (grama baixa, média, grama alta e matinhos)
-        // Devem ser 100% livres para caminhar (SEM blockguard)
+        // Gramas
         const isGrass =
           (g >= 135 && (r >= 45 || b >= 85)) ||
           (g >= 110 && g >= r + 15 && g >= b - 10 && (r >= 45 || b >= 75)) ||
@@ -1161,8 +764,7 @@ z.setData('obstacleType', 'boundary');
           continue;
         }
 
-        // 5. CAMINHOS E ESTRADAS (terra batida, areia, cascalho, calçadas de pedra)
-        // Devem ser 100% livres para caminhar (SEM blockguard)
+        // Caminhos e estradas
         const isDirtRoad =
           r >= 135 &&
           g >= 115 &&
@@ -1183,8 +785,7 @@ z.setData('obstacleType', 'boundary');
           continue;
         }
 
-        // 6. ESCADAS E DEGRAUS (madeira, pedra esculpida em falésias)
-        // Devem ser 100% livres para caminhar (SEM blockguard)
+        // Escadas e degraus
         const isWoodStair =
           r >= 125 &&
           r <= 220 &&
@@ -1209,8 +810,7 @@ z.setData('obstacleType', 'boundary');
           continue;
         }
 
-        // 7. ÁRVORES GRANDES (apenas o miolo/tronco de árvores grandes maciças)
-        // Bloqueiam pokémons terrestres, mas pokémons voadores passam por cima!
+        // Árvores grandes
         const isTreeCanopy =
           r <= 42 && g <= 145 && b <= 80 && g >= r + 25 && g >= b + 10;
         const isTreeTrunk =
@@ -1222,7 +822,7 @@ z.setData('obstacleType', 'boundary');
           continue;
         }
 
-        // 8. Telhados de casas e construções (voadores passam por cima, terrestres bloqueiam)
+        // Telhados
         const isRedRoof = r > 165 && g < 95 && b < 95;
         const isBlueRoof = b > 160 && r < 100 && g < 150;
         if (isRedRoof || isBlueRoof) {
@@ -1230,7 +830,7 @@ z.setData('obstacleType', 'boundary');
           continue;
         }
 
-        // 9. Paredes rochosas verticais e penhascos intransponíveis
+        // Falésias
         const isCliff =
           r > g + 22 && g > b + 12 && r >= 95 && r <= 220 && b < 105;
         if (isCliff) {
@@ -1248,28 +848,11 @@ z.setData('obstacleType', 'boundary');
     const buildingRatio = building / total;
     const rockRatio = rock / total;
 
-    // 1. Regra prioritária de fluidez: Se há pelo menos 20% de área caminhável
-    // (grama, flor, caminho ou escada), a célula é 100% LIVRE (walkable) e NUNCA gera blockguard!
-    if (walkableRatio >= 0.20) {
-      return 'walkable';
-    }
+    if (walkableRatio >= 0.20) return 'walkable';
+    if (waterRatio >= 0.35) return 'water';
+    if (treeRatio >= 0.45 || buildingRatio >= 0.35) return 'building';
+    if (rockRatio >= 0.45) return 'boundary';
 
-    // 2. Corpos d'água (pokémons de água nadam, voadores voam, outros bloqueiam)
-    if (waterRatio >= 0.35) {
-      return 'water';
-    }
-
-    // 3. Árvores grandes e construções sólidas (voadores voam por cima, terrestres têm bodyblock)
-    if (treeRatio >= 0.45 || buildingRatio >= 0.35) {
-      return 'building';
-    }
-
-    // 4. Falésias verticais intransponíveis e paredes de caverna (boundary: bloqueia todos)
-    if (rockRatio >= 0.45) {
-      return 'boundary';
-    }
-
-    // 5. Padrão seguro para áreas abertas
     return 'walkable';
   }
 
@@ -1302,45 +885,28 @@ z.setData('obstacleType', 'boundary');
     this.obstacleGroup.refresh();
   }
 
-  private destroyMapObstacles(m: ActiveMapInstance): void {
-    for (const zone of m.obstacleZones) {
-      if (zone.body) {
-        this.scene.physics.world.remove(
-          zone.body as Phaser.Physics.Arcade.StaticBody
-        );
-      }
-      this.obstacleGroup.remove(zone, true, true);
-    }
-    m.obstacleZones = [];
-    this.obstacleGroup.refresh();
-  }
-
   private renderDebugGrid(): void {
     this.debugGraphics.clear();
     if (!this.isDebugVisible) return;
 
-    const maps = this.pendingNextMap
-      ? [this.currentMap, this.pendingNextMap]
-      : [this.currentMap];
-    for (const m of maps) {
-      for (let r = 0; r < m.rows; r++) {
-        for (let c = 0; c < m.cols; c++) {
-          if (!m.blockedGrid[r][c]) continue;
-          const x = m.x + c * m.cellSize;
-          const y = m.y + r * m.cellSize;
-          this.debugGraphics.fillStyle(0xff2244, 0.36);
-          this.debugGraphics.fillRect(x, y, m.cellSize, m.cellSize);
+    const m = this.currentMap;
+    if (!m) return;
+
+    for (let r = 0; r < m.rows; r++) {
+      for (let c = 0; c < m.cols; c++) {
+        const type = m.cellTypeGrid[r][c];
+        if (type === 'walkable') continue;
+        const x = m.x + c * m.cellSize;
+        const y = m.y + r * m.cellSize;
+        if (type === 'water') {
+          this.debugGraphics.fillStyle(0x0284c7, 0.4);
+        } else if (type === 'building') {
+          this.debugGraphics.fillStyle(0xf97316, 0.4);
+        } else {
+          this.debugGraphics.fillStyle(0xef4444, 0.4);
         }
+        this.debugGraphics.fillRect(x, y, m.cellSize, m.cellSize);
       }
-    }
-    this.debugGraphics.lineStyle(2, 0x38bdf8, 0.9);
-    for (const z of this.transitionWallZones) {
-      this.debugGraphics.strokeRect(
-        z.x - z.width / 2,
-        z.y - z.height / 2,
-        z.width,
-        z.height
-      );
     }
   }
 }

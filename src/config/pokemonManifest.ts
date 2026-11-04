@@ -9,7 +9,33 @@ export type PokemonClassId =
 
 export type ElementType = 'eletrico' | 'fogo' | 'planta' | 'agua' | 'fada';
 
-export const MAX_PLAYER_LEVEL = 10;
+export const MAX_PLAYER_LEVEL = 15;
+
+/**
+ * Curva de XP balanceada para partidas de 3 minutos por mapa até o Nível 15
+ */
+export const XP_CURVE_LEVELS: number[] = [
+  0,    // Nv 1 (base)
+  15,   // Nv 1 -> 2
+  35,   // Nv 2 -> 3
+  70,   // Nv 3 -> 4 (1ª Evolução: Charmeleon, Ivysaur, Wartortle)
+  120,  // Nv 4 -> 5 (Evolução: Raichu, Wigglytuff)
+  185,  // Nv 5 -> 6
+  265,  // Nv 6 -> 7
+  360,  // Nv 7 -> 8 (2ª Evolução: Charizard, Venusaur, Blastoise)
+  480,  // Nv 8 -> 9
+  620,  // Nv 9 -> 10
+  780,  // Nv 10 -> 11
+  960,  // Nv 11 -> 12
+  1160, // Nv 12 -> 13
+  1380, // Nv 13 -> 14
+  1650, // Nv 14 -> 15 (Nível Máximo!)
+];
+
+export function getRequiredXpForLevel(level: number): number {
+  const idx = Math.max(1, Math.min(level, MAX_PLAYER_LEVEL - 1));
+  return XP_CURVE_LEVELS[idx] ?? 1650;
+}
 
 export interface ClassSummaryItem {
   text: string;

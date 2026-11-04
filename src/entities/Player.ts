@@ -12,6 +12,8 @@ import {
   PokemonAttackProfile,
   PokemonClassDefinition,
   PokemonDefinition,
+  MAX_PLAYER_LEVEL,
+  getRequiredXpForLevel,
 } from '../config/pokemonManifest';
 import { DEPTH, depthForY } from '../systems/depth';
 import {
@@ -137,7 +139,7 @@ export class Player {
 
   public level = 1;
   public xp = 0;
-  public xpToNextLevel = 75;
+  public xpToNextLevel = getRequiredXpForLevel(1);
 
   public maxHp: number;
   public hp: number;
@@ -300,6 +302,44 @@ export class Player {
     this.onKill = onKill;
   }
 
+  get x(): number {
+    return this.sprite.x;
+  }
+  set x(val: number) {
+    this.sprite.x = val;
+    this.shadow.x = val;
+    this.shieldBubbleGfx.x = val;
+    this.wishBubbleGfx.x = val;
+  }
+
+  get y(): number {
+    return this.sprite.y;
+  }
+  set y(val: number) {
+    this.sprite.y = val;
+    this.shadow.y = val + 10;
+    this.shieldBubbleGfx.y = val;
+    this.wishBubbleGfx.y = val;
+    this.sprite.setDepth(depthForY(val));
+  }
+
+  setPosition(x: number, y: number): void {
+    this.sprite.setPosition(x, y);
+    this.sprite.body.reset(x, y);
+    this.shadow.setPosition(x, y + 10);
+    this.shieldBubbleGfx.setPosition(x, y);
+    this.wishBubbleGfx.setPosition(x, y);
+    this.sprite.setDepth(depthForY(y));
+  }
+
+  get body(): Phaser.Physics.Arcade.Body {
+    return this.sprite.body as Phaser.Physics.Arcade.Body;
+  }
+
+  setCollideWorldBounds(val: boolean): void {
+    this.sprite.setCollideWorldBounds(val);
+  }
+
   teleportTo(x: number, y: number): void {
     this.dashTimeRemaining = 0;
     this.sprite.setPosition(x, y);
@@ -360,6 +400,7 @@ export class Player {
     this.isSwimming = val;
     if (!val) {
       this.swimRippleGfx.clear();
+      this.sprite.setOrigin(0.5, 0.5);
       this.shadow.setAlpha(0.3);
     } else {
       this.shadow.setAlpha(0.08);
@@ -397,10 +438,12 @@ export class Player {
       this.getAbilityLevel('agility') * 0.08 +
       this.getAbilityLevel('elec_surge_surfer') * 0.07 +
       this.getAbilityLevel('grass_chlorophyll') * 0.07;
+    const terrainMult = this.isSwimming ? 1.15 : 1.0;
     return (
       this.pokemonDef.speed *
       this.classDef.stats.speedMultiplier *
-      (1 + agilityBonus)
+      (1 + agilityBonus) *
+      terrainMult
     );
   }
 
@@ -497,15 +540,20 @@ export class Player {
   // ===================== XP / NÍVEL / EVOLUÇÃO =====================
 
   gainXp(rawAmount: number): XpGainResult {
+    if (this.level >= MAX_PLAYER_LEVEL) {
+      this.xp = this.xpToNextLevel;
+      return { levelsGained: 0, newLevel: this.level };
+    }
+
     this.xp += Math.round(rawAmount * this.getXpMultiplier());
     let levelsGained = 0;
     let evolvedFrom: string | undefined;
     let evolvedTo: string | undefined;
 
-    while (this.xp >= this.xpToNextLevel) {
+    while (this.xp >= this.xpToNextLevel && this.level < MAX_PLAYER_LEVEL) {
       this.xp -= this.xpToNextLevel;
       this.level++;
-      this.xpToNextLevel = Math.round(this.xpToNextLevel * 1.38);
+      this.xpToNextLevel = getRequiredXpForLevel(this.level);
       levelsGained++;
 
       const evoId = this.pokemonDef.evolvesToId;
@@ -520,6 +568,11 @@ export class Player {
       } else {
         this.maxHp = this.computeMaxHp();
         this.hp = Math.min(this.maxHp, this.hp + Math.round(this.maxHp * 0.3));
+      }
+
+      if (this.level >= MAX_PLAYER_LEVEL) {
+        this.xp = this.xpToNextLevel;
+        break;
       }
     }
 
@@ -802,28 +855,45 @@ export class Player {
     this.updateProjectiles(delta);
 
     if (this.isSwimming) {
-      // Animação de nado: ondulações suaves na água e flutuação
-      const swimBob = Math.sin(this.scene.time.now / 150) * 2;
-      this.sprite.y += swimBob;
+      // 1. Efeito visual de nado sem alterar sprite.y diretamente (estabilidade física WASD)
+      const time = this.scene.time.now;
+      const bobOffset = Math.sin(time * 0.006) * 0.04;
+      this.sprite.setOrigin(0.5, 0.55 + bobOffset);
 
+      // 2. Ondulações nos pés do Pokémon
       this.swimRippleGfx.clear();
-      const t = this.scene.time.now;
-      const p1 = (t % 850) / 850;
-      const p2 = ((t + 425) % 850) / 850;
-      const px = this.sprite.x;
-      const py = this.sprite.y + 8;
+      this.sprite.setOrigin(0.5, 0.5);
+      const rippleRadius = 16 + Math.sin(time * 0.008) * 4;
+      const rippleAlpha = 0.45 + Math.cos(time * 0.008) * 0.2;
 
-      this.swimRippleGfx.lineStyle(2.5, 0xe0f2fe, (1 - p1) * 0.75);
-      this.swimRippleGfx.strokeEllipse(px, py, 22 + p1 * 26, 11 + p1 * 13);
-      this.swimRippleGfx.lineStyle(2, 0x38bdf8, (1 - p2) * 0.55);
-      this.swimRippleGfx.strokeEllipse(px, py, 22 + p2 * 26, 11 + p2 * 13);
+      this.swimRippleGfx.lineStyle(2, 0x66ccff, rippleAlpha);
+      this.swimRippleGfx.strokeEllipse(
+        this.sprite.x,
+        this.sprite.y + 10,
+        rippleRadius * 2,
+        rippleRadius
+      );
+
+      this.swimRippleGfx.lineStyle(1.5, 0xffffff, rippleAlpha * 0.7);
+      this.swimRippleGfx.strokeEllipse(
+        this.sprite.x,
+        this.sprite.y + 10,
+        rippleRadius * 1.3,
+        rippleRadius * 0.65
+      );
 
       if (isMoving) {
         this.swimFoamTimer += delta;
         if (this.swimFoamTimer >= 90) {
           this.swimFoamTimer = 0;
           const foam = this.scene.add
-            .circle(px - vx * 12 + Phaser.Math.Between(-4, 4), py + Phaser.Math.Between(-2, 2), Phaser.Math.Between(3, 5), 0xffffff, 0.8)
+            .circle(
+              this.sprite.x - vx * 12 + Phaser.Math.Between(-4, 4),
+              this.sprite.y + 10 + Phaser.Math.Between(-2, 2),
+              Phaser.Math.Between(3, 5),
+              0xffffff,
+              0.8
+            )
             .setDepth(DEPTH.SHADOW + 2);
           this.scene.tweens.add({
             targets: foam,
@@ -836,16 +906,20 @@ export class Player {
       }
       this.shadow.setAlpha(0.08);
     } else if (this.canFly()) {
-      // Pokémons voadores (Charizard): pairam acima do chão com sombra no solo
-      const flyBob = Math.sin(this.scene.time.now / 140) * 3;
-      this.sprite.y -= (8 + flyBob);
-      this.shadow.setPosition(this.sprite.x, this.sprite.y + 16 + flyBob);
+      // Pokémons voadores (Charizard): pairam acima do chão sem alterar a física Y
+      const time = this.scene.time.now;
+      const flyBobOffset = Math.sin(time * 0.006) * 0.03;
+      this.sprite.setOrigin(0.5, 0.62 + flyBobOffset);
+      this.shadow.setPosition(this.sprite.x, this.sprite.y + 16);
       this.shadow.setAlpha(0.2);
       this.swimRippleGfx.clear();
+      this.sprite.setOrigin(0.5, 0.5);
     } else {
+      this.sprite.setOrigin(0.5, 0.5);
       this.shadow.setPosition(this.sprite.x, this.sprite.y + 11);
       this.shadow.setAlpha(0.3);
       this.swimRippleGfx.clear();
+      this.sprite.setOrigin(0.5, 0.5);
     }
 
     this.shieldBubbleGfx.setPosition(this.sprite.x, this.sprite.y);

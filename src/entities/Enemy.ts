@@ -27,7 +27,7 @@ export class Enemy {
   private minibossSkillTimerMs = 0;
   private geodudeAttackCycle = 0;
   public hp: number;
-  public readonly maxHp: number;
+  public maxHp: number;
   public isDead = false;
 
   private knockbackTimer = 0;
@@ -855,6 +855,49 @@ export class Enemy {
       return true;
     }
     return false;
+  }
+
+  public getBaseHp(): number {
+    return this.pokemonDef.baseHp;
+  }
+
+  public reposition(newX: number, newY: number): void {
+    if (this.isDead) return;
+    this.sprite.setPosition(newX, newY);
+    this.sprite.body.reset(newX, newY);
+    this.sprite.setVelocity(0, 0);
+    this.syncShadowAndDepth();
+  }
+
+  public repositionAndRestore(newX: number, newY: number, newMaxHp?: number): void {
+    if (this.isDead) return;
+
+    this.sprite.setPosition(newX, newY);
+    this.sprite.body.reset(newX, newY);
+    this.sprite.setVelocity(0, 0);
+
+    if (newMaxHp !== undefined) {
+      this.maxHp = newMaxHp;
+    }
+    this.hp = this.maxHp;
+
+    // Reset status effects
+    this.sleepTimerMs = 0;
+    this.slowTimerMs = 0;
+    this.slowFactor = 1;
+    this.poisonTimerMs = 0;
+    this.poisonTickAccumMs = 0;
+    this.poisonDamagePerSec = 0;
+    this.activeStatusTint = null;
+    this.clearSleepIcon();
+    if (this.sprite.active) {
+      this.sprite.clearTint();
+    }
+
+    this.knockbackTimer = 0;
+    this.currentState = 'Walk';
+    this.playAnim(true);
+    this.syncShadowAndDepth();
   }
 
   destroy(): void {

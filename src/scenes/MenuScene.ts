@@ -429,7 +429,7 @@ export class MenuScene extends Phaser.Scene {
         .text(
           0,
           10,
-          'Nenhuma partida\nregistrada ainda.\n\nSuba até o Nível 10\ne derrote o Boss Onix\npara conquistar sua\nprimeira Vitória!',
+          `Nenhuma partida\nregistrada ainda.\n\nSuba até o Nível ${MAX_PLAYER_LEVEL}\ne derrote o Boss Onix\npara conquistar sua\nprimeira Vitória!`,
           {
             fontFamily: 'monospace',
             fontSize: '12px',

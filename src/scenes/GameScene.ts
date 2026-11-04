@@ -67,6 +67,32 @@ export class GameScene extends Phaser.Scene {
   private processedDeaths = new WeakSet<Enemy>();
 
   private currentMiniboss: Enemy | null = null;
+  private readonly MINIBOSS_SPAWN_TIME = 180; // 3 minutos (180 segundos) por mapa
+  private currentMapIndex = 0;
+  private isTransitioningMap = false;
+
+  // Propriedades do blockGuard (Anti-Stuck & Wall-Sliding sem limites de borda)
+  private lastSafePlayerPos = new Phaser.Math.Vector2(900, 900);
+  private prevPlayerX = 0;
+  private prevPlayerY = 0;
+
+  // Estado da Ponte Intermapas Dinâmica
+  // ============================================================================
+  // CONFIGURAÇÕES DE SPAWN E RECICLAGEM NO MAPA INFINITO
+  // ============================================================================
+  private readonly SPAWN_MARGIN_MIN = 80;       // Distância mínima fora da borda da câmera para nascer
+  private readonly SPAWN_MARGIN_MAX = 220;      // Distância máxima fora da borda da câmera
+  private readonly RECYCLE_DISTANCE = 1050;     // Distância máxima antes de reciclar o inimigo comum
+  private readonly MINIBOSS_LEASH_DIST = 1200;  // Distância máxima antes de puxar o Miniboss Alfa de volta
+  private readonly BASE_MAX_ENEMIES = 45;       // Limite base de inimigos simultâneos na tela
+
+  private enemyCullTimer: number = 0;           // Timer para rodar a verificação a cada 200ms (otimização)
+
+  private bridgeActive: boolean = false;
+  private bridgeBounds!: Phaser.Geom.Rectangle; // Área caminhável da ponte
+  private bridgeContainer!: Phaser.GameObjects.Container;
+  private nextMapPreviewImg!: Phaser.GameObjects.Image;
+  private bridgeGuideTween?: Phaser.Tweens.Tween;
   private minibossSpawned = false;
   private minibossDefeated = false;
   private minibossKillsInMap = 0;
@@ -165,6 +191,20 @@ export class GameScene extends Phaser.Scene {
     this.xpOrbs = [];
     this.processedDeaths = new WeakSet<Enemy>();
     this.currentMiniboss = null;
+    this.currentMapIndex = 0;
+    this.isTransitioningMap = false;
+    this.lastSafePlayerPos.set(900, 900);
+    this.prevPlayerX = 0;
+    this.prevPlayerY = 0;
+    this.enemyCullTimer = 0;
+    this.bridgeActive = false;
+    if (this.bridgeGuideTween) {
+      this.bridgeGuideTween.stop();
+      this.bridgeGuideTween = undefined;
+    }
+    if (this.bridgeContainer) {
+      this.bridgeContainer.destroy(true);
+    }
     this.minibossSpawned = false;
     this.minibossDefeated = false;
     this.minibossKillsInMap = 0;
@@ -202,6 +242,7 @@ export class GameScene extends Phaser.Scene {
       spawnPos.y,
       this.selectedPokemonId
     );
+    this.player.sprite.setCollideWorldBounds(false);
     this.player.setCombatContext(
       () => this.enemies,
       (killedEnemy) => this.onEnemyDefeated(killedEnemy)
@@ -209,27 +250,16 @@ export class GameScene extends Phaser.Scene {
 
     this.enemyGroup = this.physics.add.group();
 
-    // Colisão do Jogador com o Cenário:
-    // - Pokémons de Água (Squirtle/Wartortle/Blastoise) podem entrar nos lagos e nadar!
-    // - Pokémons Voadores (Charizard) podem voar livremente sobre lagos e casas!
-    // - Demais tipos de Pokémon são rigorosamente bloqueados por lagos e casas!
-    this.physics.add.collider(
-      this.player.sprite,
-      this.mapManager.getObstaclesGroup(),
-      undefined,
-      (_playerObj, zoneObj) => {
-        const type = (zoneObj as Phaser.GameObjects.Zone).getData('obstacleType');
-        if (type === 'water') {
-          if (this.player.canSwim() || this.player.canFly()) return false;
-          return true;
-        }
-        if (type === 'building') {
-          if (this.player.canFly()) return false;
-          return true;
-        }
-        return true;
-      }
-    );
+    // O movimento e as colisões com construções e água são geridos pelo applyBlockGuard
+    // para garantir deslize lateral suave (wall-sliding) sem solavancos ou travas de borda.
+    this.lastSafePlayerPos.set(spawnPos.x, spawnPos.y);
+    this.prevPlayerX = spawnPos.x;
+    this.prevPlayerY = spawnPos.y;
+
+    this.events.on(Phaser.Scenes.Events.POST_UPDATE, () => {
+      if (this.isModalOpen || this.player.isDead) return;
+      this.applyBlockGuard(this.prevPlayerX, this.prevPlayerY);
+    });
 
     // Colisão dos Inimigos com o Cenário:
     // - Inimigos Voadores (Zubat) podem passar sobre lagos e casas!
@@ -279,8 +309,12 @@ export class GameScene extends Phaser.Scene {
 
     const dtSeconds = delta / 1000;
     this.runTimeSeconds += dtSeconds;
-    this.mapManager.update(delta);
 
+    // 2. Salva a coordenada antes do passo de movimento para o blockGuard
+    this.prevPlayerX = this.player.x;
+    this.prevPlayerY = this.player.y;
+
+    // 3. Movimentação do jogador (WASD, Setas, Dash, Especiais)
     const actions = this.player.update(delta);
     if (actions.specialUsed) {
       const spec = this.player.getSpecialDefinition();
@@ -291,63 +325,65 @@ export class GameScene extends Phaser.Scene {
       );
     }
 
-        const px = this.player.sprite.x;
-    const py = this.player.sprite.y;
+    // 4. Aplica o blockGuard sem limites de borda (desliza em obstáculos internos e libera o mapa infinito)
+    this.applyBlockGuard(this.prevPlayerX, this.prevPlayerY);
+
+    const px = this.player.x;
+    const py = this.player.y;
 
     // Atualiza estado de nado exclusivo para Pokémons aquáticos
     if (this.player.canSwim()) {
-      const inWater = this.mapManager.isWaterAt(px, py);
+      const inWater = this.mapManager.isWaterAt(this.player.x, this.player.y);
       this.player.setSwimming(inWater);
     }
 
-    // 1. Tempo do mapa, Miniboss e transição conectada com pontezinha
-    if (!this.mapManager.isBossMapActive()) {
-      // Condição de Miniboss: surge aos 24s de exploração OU após 14 abates no mapa
-      if (!this.minibossSpawned) {
+    // 5. Atualiza os 9 quadrantes do mapa infinito sem espelhar e sem árvores de borda
+    this.mapManager.update(this.player.x, this.player.y);
+
+    // 6. Miniboss a cada 3 minutos (180 segundos) por mapa
+    if (!this.mapManager.isBossMapActive() && !this.isTransitioningMap) {
+      if (!this.minibossSpawned && !this.minibossDefeated) {
         this.mapElapsedSeconds += dtSeconds;
-        if (this.mapElapsedSeconds >= 24 || this.minibossKillsInMap >= 14) {
+        if (this.mapElapsedSeconds >= this.MINIBOSS_SPAWN_TIME) {
           this.minibossSpawned = true;
           this.spawnCurrentMapMiniboss();
         }
       }
-
-      // A passagem só é aberta e apontada pela bússola após derrotar o Miniboss do mapa
-      if (this.minibossDefeated && this.mapManager.isNextMapGateOpen()) {
-        const enteredMapDef = this.mapManager.checkPlayerEnteredNextMap(px, py);
-        if (enteredMapDef) {
-          this.onPlayerCompletedMapTransition(enteredMapDef.name);
-        } else {
-          this.updateCompassIndicator(px, py);
-        }
-      } else {
-        this.compassText.setVisible(false);
-      }
-    } else {
-      this.compassText.setVisible(false);
     }
+    this.compassText.setVisible(false);
+    this.updateBridgeAndCompass();
 
-    // 2. Spawner de inimigos intensificado com ondas dinâmicas
+    // 2. Spawner de inimigos intensificado com ondas dinâmicas e escalonamento de densidade
     this.spawnTimerMs += delta;
     const isBossActive = Boolean(this.bossEnemy && !this.bossEnemy.isDead);
     const maxEnemies = isBossActive
       ? 8
-      : Math.min(55, 30 + Math.floor(this.runTimeSeconds / 20) * 3);
+      : Math.min(
+          130,
+          Math.floor(
+            this.BASE_MAX_ENEMIES +
+              this.currentMapIndex * 10 +
+              (this.runTimeSeconds / 60) * 6
+          )
+        );
     const spawnInterval = isBossActive
       ? 3800
-      : Math.max(750, 1600 - Math.floor(this.runTimeSeconds / 15) * 80);
+      : Math.max(450, 1400 - Math.floor(this.runTimeSeconds / 15) * 60);
 
     if (this.spawnTimerMs >= spawnInterval && this.enemies.length < maxEnemies) {
       this.spawnTimerMs = 0;
-      const countToSpawn = Math.min(
-        maxEnemies - this.enemies.length,
-        1 + Math.floor(this.runTimeSeconds / 45)
-      );
+      const countToSpawn = isBossActive
+        ? 1
+        : Math.min(
+            maxEnemies - this.enemies.length,
+            1 + Math.floor(this.runTimeSeconds / 45)
+          );
       for (let s = 0; s < countToSpawn; s++) {
         this.spawnWildPokemon();
       }
     }
 
-    // 3. Atualiza inimigos, despawn por distância e verificação de dano de contato
+    // 3. Atualiza inimigos e verificação de dano de contato
     this.enemies = this.enemies.filter((enemy) => {
       if (enemy.isDead) return false;
 
@@ -357,23 +393,6 @@ export class GameScene extends Phaser.Scene {
         enemy.sprite.x,
         enemy.sprite.y
       );
-
-      // Despawn por distância: inimigos comuns somem se ficarem muito distantes (>640px)
-      const DESPAWN_DISTANCE = 640;
-      if (!enemy.isBoss && !enemy.isMiniboss && distToPlayer > DESPAWN_DISTANCE) {
-        enemy.destroy();
-        this.spawnWildPokemon();
-        return false;
-      }
-
-      // Miniboss persegue ativamente o jogador se ficar longe (>750px)
-      if (enemy.isMiniboss && distToPlayer > 750) {
-        const repAngle = Phaser.Math.Angle.Between(px, py, enemy.sprite.x, enemy.sprite.y);
-        const repX = px + Math.cos(repAngle) * 320;
-        const repY = py + Math.sin(repAngle) * 320;
-        const safePos = this.mapManager.findNearestWalkablePosition(repX, repY);
-        enemy.sprite.setPosition(safePos.x, safePos.y);
-      }
 
       enemy.update(
         delta,
@@ -462,6 +481,9 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    // Recicla inimigos distantes, puxa o Miniboss se ficar muito longe e agrupa XP antigo
+    this.cullAndRecycleDistantEnemies(delta);
+
     // 6. Modal de escolha de Habilidade ou Transição Nível 10 para Boss
     if (this.pendingAbilityPicks > 0 && !this.isModalOpen) {
       this.openAbilityChoiceModal();
@@ -525,32 +547,9 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // 2. Miniboss do Mapa Derrotado: Desbloqueia a ponte para o próximo mapa!
+    // 2. Miniboss do Mapa Derrotado: Avança automaticamente para o próximo mapa após 1.5s
     if (enemy === this.currentMiniboss || enemy.isMiniboss) {
-      this.minibossDefeated = true;
-      this.currentMiniboss = null;
-
-      // Dropa recompensa substancial de 5 orbes dourados
-      for (let i = 0; i < 5; i++) {
-        const ox = x + Phaser.Math.Between(-32, 32);
-        const oy = y + Phaser.Math.Between(-32, 32);
-        const orbGfx = this.add
-          .circle(ox, oy, 7.5, 0xffd700, 1)
-          .setStrokeStyle(2.5, 0xfffbeb, 1)
-          .setDepth(DEPTH.XP_ORB);
-        this.xpOrbs.push({
-          gfx: orbGfx,
-          x: ox,
-          y: oy,
-          xpAmount: 20,
-          isGolden: true,
-          ageMs: 0,
-        });
-      }
-
-      this.cameras.main.shake(450, 0.008);
-      this.showBanner('🎉 MINIBOSS DERROTADO! A PASSAGEM PARA O PRÓXIMO MAPA FOI DESBLOQUEADA!');
-      this.openNextMapPassage();
+      this.handleMinibossDefeated(enemy);
       return;
     }
 
@@ -627,6 +626,15 @@ export class GameScene extends Phaser.Scene {
     this.bossEncounterStarted = true;
     this.bossPhase = 1;
 
+    this.bridgeActive = false;
+    if (this.bridgeGuideTween) {
+      this.bridgeGuideTween.stop();
+      this.bridgeGuideTween = undefined;
+    }
+    if (this.bridgeContainer) {
+      this.bridgeContainer.destroy(true);
+    }
+
     this.clearAllActiveEnemiesAndOrbs();
     this.compassText.setVisible(false);
 
@@ -685,20 +693,23 @@ export class GameScene extends Phaser.Scene {
       element: 'planta',
     };
 
-    const bounds = this.mapManager.getCurrentMapBounds();
-    const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-    const distance = 250;
-    const rawX = Phaser.Math.Clamp(
-      this.player.sprite.x + Math.cos(angle) * distance,
-      bounds.x + 64,
-      bounds.x + bounds.width - 64
-    );
-    const rawY = Phaser.Math.Clamp(
-      this.player.sprite.y + Math.sin(angle) * distance,
-      bounds.y + 64,
-      bounds.y + bounds.height - 64
-    );
-    const spawnPos = this.mapManager.findNearestWalkablePosition(rawX, rawY);
+    const isBoss = this.mapManager.isBossMapActive();
+    const isFlying = cfg.id === '0123' || cfg.id === '0042';
+    const isWater = cfg.id === '0062' || cfg.id === '0131';
+    let spawnPos: { x: number; y: number };
+
+    if (isBoss) {
+      const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+      const distance = 250;
+      let rawX = this.player.sprite.x + Math.cos(angle) * distance;
+      let rawY = this.player.sprite.y + Math.sin(angle) * distance;
+      const bounds = this.mapManager.getCurrentMapBounds();
+      rawX = Phaser.Math.Clamp(rawX, bounds.x + 64, bounds.x + bounds.width - 64);
+      rawY = Phaser.Math.Clamp(rawY, bounds.y + 64, bounds.y + bounds.height - 64);
+      spawnPos = this.mapManager.findNearestWalkablePosition(rawX, rawY);
+    } else {
+      spawnPos = this.getValidOffscreenSpawnPoint(isFlying, isWater);
+    }
 
     const hpMultiplier =
       (1 + this.mapManager.mapsCleared * 0.35 + (this.player.level - 1) * 0.12) * 1.2;
@@ -1652,12 +1663,388 @@ export class GameScene extends Phaser.Scene {
     this.modalContainer = container;
   }
 
-  // ===================== MAPA & SPAWN =====================
+  // ===================== BLOCKGUARD & TERRENO =====================
 
-  private openNextMapPassage(): void {
-    if (this.mapManager.isBossMapActive()) return;
-    const nextDef = this.mapManager.spawnNextConnectedMap();
-    this.showBanner(`🌉 Pontezinha aberta ao NORTE para: ${nextDef.name}!`);
+  /**
+   * Verifica se a coordenada (worldX, worldY) bloqueia o movimento físico do Pokémon atual.
+   */
+  private isTerrainBlocked(worldX: number, worldY: number): boolean {
+    // 1. PRIORIDADE DA PONTE INTERMAPAS (Quando ativa após derrotar o Miniboss)
+    if (this.bridgeActive && this.bridgeBounds) {
+      const inBridgeYRange =
+        worldY >= this.bridgeBounds.top - 10 && worldY <= this.bridgeBounds.bottom + 24;
+
+      if (inBridgeYRange) {
+        // Se estiver dentro do piso de madeira da ponte: 100% LIVRE (ignora água/árvores abaixo)
+        if (worldX >= this.bridgeBounds.left + 10 && worldX <= this.bridgeBounds.right - 10) {
+          return false;
+        }
+
+        // Corrimãos Físicos Laterais (18px de espessura nas bordas esquerda e direita da ponte)
+        const hitLeftRail =
+          worldX >= this.bridgeBounds.left - 12 && worldX < this.bridgeBounds.left + 10;
+        const hitRightRail =
+          worldX > this.bridgeBounds.right - 10 && worldX <= this.bridgeBounds.right + 12;
+
+        if (hitLeftRail || hitRightRail) {
+          return true; // Bloqueia o jogador fisicamente no corrimão
+        }
+      }
+    }
+
+    return this.mapManager.isTerrainBlocked(worldX, worldY, this.player);
+  }
+
+  /**
+   * BLOCKGUARD ATUALIZADO PARA MAPA INFINITO:
+   * - Não limita as bordas do mundo (exceto quando estiver na Arena Final map5-BOSS).
+   * - Faz deslize lateral suave (wall-sliding) ao encostar em casas, árvores internas ou margens de rios.
+   * - Ejeção inteligente caso o jogador entre num obstáculo durante o Dash ou evolução.
+   */
+  private applyBlockGuard(prevX: number, prevY: number): void {
+    // 1. Na Arena do Boss (map5-BOSS.jpeg), mantém o confinamento na arena
+    if (this.mapManager.isBossMapActive()) {
+      const bounds = this.mapManager.getCurrentMapBounds();
+      const margin = 48;
+      this.player.x = Phaser.Math.Clamp(
+        this.player.x,
+        bounds.x + margin,
+        bounds.x + bounds.width - margin
+      );
+      this.player.y = Phaser.Math.Clamp(
+        this.player.y,
+        bounds.y + margin,
+        bounds.y + bounds.height - margin
+      );
+      return;
+    }
+
+    const currX = this.player.x;
+    const currY = this.player.y;
+
+    // 2. Se a posição atual está livre, salva como última posição segura e retorna
+    if (!this.isTerrainBlocked(currX, currY)) {
+      this.lastSafePlayerPos.set(currX, currY);
+      return;
+    }
+
+    // 3. Deslize por eixo independente (Wall-Sliding do blockGuard):
+    // Testa se pode manter o movimento apenas no eixo X (deslizando horizontalmente)
+    if (!this.isTerrainBlocked(currX, prevY)) {
+      this.player.y = prevY;
+      if (this.player.body?.velocity) this.player.body.velocity.y = 0;
+      this.lastSafePlayerPos.set(currX, prevY);
+      return;
+    }
+
+    // Testa se pode manter o movimento apenas no eixo Y (deslizando verticalmente)
+    if (!this.isTerrainBlocked(prevX, currY)) {
+      this.player.x = prevX;
+      if (this.player.body?.velocity) this.player.body.velocity.x = 0;
+      this.lastSafePlayerPos.set(prevX, currY);
+      return;
+    }
+
+    // 4. Se travou nos dois eixos, restaura para prevX/prevY ou busca radial de escape (Anti-Stuck)
+    if (!this.isTerrainBlocked(prevX, prevY)) {
+      this.player.setPosition(prevX, prevY);
+    } else {
+      // Ejeção de emergência do blockGuard em 8 direções caso um Dash termine dentro de uma construção
+      for (let radius = 8; radius <= 64; radius += 8) {
+        let escaped = false;
+        for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
+          const testX = currX + Math.cos(angle) * radius;
+          const testY = currY + Math.sin(angle) * radius;
+          if (!this.isTerrainBlocked(testX, testY)) {
+            this.player.setPosition(testX, testY);
+            this.lastSafePlayerPos.set(testX, testY);
+            escaped = true;
+            break;
+          }
+        }
+        if (escaped) break;
+      }
+    }
+  }
+
+  // ===================== PROGRESSÃO DE MAPAS & MINIBOSS =====================
+
+  private handleMinibossDefeated(miniboss: Enemy): void {
+    this.minibossDefeated = true;
+    this.currentMiniboss = null;
+    this.bossHudContainer.setVisible(false);
+
+    // Tremor de câmera e aviso de rota liberada
+    this.cameras.main.shake(300, 0.008);
+    this.showFloatingBanner('ALFA DERROTADO! A PONTE NORTE SE ABRIU!', 0xffd700);
+
+    // Dropa 12 orbes de XP garantidos do Miniboss puxados magneticamente para o jogador
+    const x = miniboss.sprite.x;
+    const y = miniboss.sprite.y;
+    for (let i = 0; i < 12; i++) {
+      const ox = x + Phaser.Math.Between(-32, 32);
+      const oy = y + Phaser.Math.Between(-32, 32);
+      const orbGfx = this.add
+        .circle(ox, oy, 8, 0xffd700, 1)
+        .setStrokeStyle(2.5, 0xfffbeb, 1)
+        .setDepth(DEPTH.XP_ORB);
+      this.xpOrbs.push({
+        gfx: orbGfx,
+        x: ox,
+        y: oy,
+        xpAmount: 25,
+        isGolden: true,
+        ageMs: 1500, // Força atração magnética imediata ao jogador
+      });
+    }
+
+    // Spawna a ponte estilizada 420px acima (ao norte) da posição atual do jogador
+    const bridgeCenterX = this.player.x;
+    const bridgeSouthEntranceY = this.player.y - 420;
+    this.spawnIntermapBridge(bridgeCenterX, bridgeSouthEntranceY);
+  }
+
+  /**
+   * Constrói a ponte intermapas conectando a posição atual no mapa infinito ao próximo mapa.
+   * @param centerX Centro horizontal da ponte (alinhado ao jogador no momento do abate)
+   * @param entranceY Coordenada Y da entrada sul da ponte
+   */
+  private spawnIntermapBridge(centerX: number, entranceY: number): void {
+    const bridgeWidth = 140;
+    const bridgeLength = 320;
+    const exitY = entranceY - bridgeLength;
+
+    // Retângulo da pista caminhável interna da ponte
+    this.bridgeBounds = new Phaser.Geom.Rectangle(
+      centerX - bridgeWidth / 2,
+      exitY,
+      bridgeWidth,
+      bridgeLength
+    );
+
+    if (this.bridgeContainer) {
+      this.bridgeContainer.destroy(true);
+    }
+    this.bridgeContainer = this.add.container(0, 0).setDepth(DEPTH.MAP + 5);
+
+    // 1. Preview conectado do próximo mapa (ou Arena Boss) logo na saída norte da ponte
+    const isGoingToBoss = this.currentMapIndex >= 6 || this.player.level >= MAX_PLAYER_LEVEL;
+    const mapKeys = ['map1', 'map2', 'map3', 'map4', 'map5', 'map6', 'map7'];
+    const nextTexKey = isGoingToBoss
+      ? 'map5-BOSS'
+      : mapKeys[Phaser.Math.Clamp(this.currentMapIndex + 1, 0, mapKeys.length - 1)];
+
+    this.nextMapPreviewImg = this.add
+      .image(centerX, exitY + 20, nextTexKey)
+      .setOrigin(0.5, 1)
+      .setScale(1.5)
+      .setAlpha(0.95);
+    this.bridgeContainer.add(this.nextMapPreviewImg);
+
+    // 2. Desenho da Ponte Estilizada, Gradiente de Emenda e Corrimãos
+    const gfx = this.add.graphics();
+
+    // Gradiente suave de transição nas extremidades (Sul e Norte)
+    for (let i = 0; i < 10; i++) {
+      const alpha = (10 - i) * 0.04;
+      gfx.fillStyle(0x1a1410, alpha);
+      gfx.fillRect(centerX - bridgeWidth / 2 - 20, entranceY - i * 4, bridgeWidth + 40, 4);
+      gfx.fillRect(centerX - bridgeWidth / 2 - 20, exitY + i * 4, bridgeWidth + 40, 4);
+    }
+
+    // Sombra embaixo da ponte (dá profundidade sobre rios/penhascos)
+    gfx.fillStyle(0x000000, 0.45);
+    gfx.fillRect(centerX - bridgeWidth / 2 - 8, exitY, bridgeWidth + 16, bridgeLength);
+
+    // Base de madeira da ponte
+    gfx.fillStyle(0x8b5a2b, 1);
+    gfx.fillRect(centerX - bridgeWidth / 2, exitY, bridgeWidth, bridgeLength);
+
+    // Tábuas horizontais estilizadas
+    const plankHeight = 16;
+    for (let py = exitY; py < entranceY; py += plankHeight) {
+      gfx.fillStyle(py % 32 === 0 ? 0x9c6631 : 0x7c4f24, 1);
+      gfx.fillRect(centerX - bridgeWidth / 2 + 6, py + 2, bridgeWidth - 12, plankHeight - 3);
+      gfx.lineStyle(1, 0x3d230a, 0.8);
+      gfx.strokeRect(centerX - bridgeWidth / 2 + 6, py + 2, bridgeWidth - 12, plankHeight - 3);
+    }
+
+    // Corrimãos físicos laterais (vigas e postes de madeira)
+    const railWidth = 10;
+    gfx.fillStyle(0x5c3a18, 1);
+    gfx.fillRect(centerX - bridgeWidth / 2 - railWidth / 2, exitY, railWidth, bridgeLength);
+    gfx.fillRect(centerX + bridgeWidth / 2 - railWidth / 2, exitY, railWidth, bridgeLength);
+
+    // Postes do corrimão a cada 40px
+    gfx.fillStyle(0x3e240c, 1);
+    for (let py = exitY; py <= entranceY; py += 40) {
+      gfx.fillCircle(centerX - bridgeWidth / 2, py, 8);
+      gfx.fillCircle(centerX + bridgeWidth / 2, py, 8);
+    }
+
+    this.bridgeContainer.add(gfx);
+
+    // 3. Setas / Sprites Guias luminosos apontando para o Norte no piso da ponte
+    const guideGroup = this.add.container(0, 0);
+    for (let i = 0; i < 4; i++) {
+      const guideY = entranceY - 40 - i * 70;
+      const guideArrow = this.add
+        .text(centerX, guideY, '▲', {
+          fontFamily: 'monospace',
+          fontSize: '26px',
+          color: '#00ffcc',
+          stroke: '#003322',
+          strokeThickness: 4,
+        })
+        .setOrigin(0.5);
+      guideGroup.add(guideArrow);
+    }
+    this.bridgeContainer.add(guideGroup);
+
+    this.bridgeGuideTween = this.tweens.add({
+      targets: guideGroup.list,
+      y: '-=14',
+      alpha: { from: 0.3, to: 1 },
+      duration: 700,
+      yoyo: true,
+      repeat: -1,
+      stagger: 120,
+    });
+
+    this.bridgeActive = true;
+  }
+
+  /**
+   * Atualiza a bússola direcional no HUD Central e verifica a travessia da ponte.
+   */
+  private updateBridgeAndCompass(): void {
+    if (!this.bridgeActive || this.isTransitioningMap) return;
+
+    // Ponto alvo da bússola: Entrada sul da ponte (ou saída norte se já estiver em cima dela)
+    const isOnBridge = Phaser.Geom.Rectangle.Contains(
+      this.bridgeBounds,
+      this.player.x,
+      this.player.y
+    );
+    const targetX = this.bridgeBounds.centerX;
+    const targetY = isOnBridge ? this.bridgeBounds.top : this.bridgeBounds.bottom;
+
+    // Distância convertida em metros (considerando 32px = 1m)
+    const distPx = Phaser.Math.Distance.Between(this.player.x, this.player.y, targetX, targetY);
+    const distMeters = Math.max(1, Math.round(distPx / 32));
+
+    // Ângulo em graus (-180 a 180) convertido para as 8 direções da bússola
+    const angleRad = Phaser.Math.Angle.Between(this.player.x, this.player.y, targetX, targetY);
+    const angleDeg = Phaser.Math.RadToDeg(angleRad);
+    const compassArrow = this.getCompassEmojiFromAngle(angleDeg);
+
+    this.mapSubStatusText.setText(
+      `${compassArrow} Ponte para o Próximo Mapa: ${distMeters}m`
+    );
+    this.mapSubStatusText.setColor('#34d399');
+
+    // Verifica se o jogador terminou de atravessar a ponte (cruzou o topo da ponte)
+    if (
+      Math.abs(this.player.x - this.bridgeBounds.centerX) <= this.bridgeBounds.width / 2 &&
+      this.player.y <= this.bridgeBounds.top + 16
+    ) {
+      this.completeBridgeCrossing();
+    }
+  }
+
+  /**
+   * Converte o ângulo em graus para uma das 8 setas direcionais da bússola
+   */
+  private getCompassEmojiFromAngle(deg: number): string {
+    const normalized = (deg + 360) % 360;
+    const directions = ['➡️', '↘️', '⬇️', '↙️', '⬅️', '↖️', '⬆️', '↗️'];
+    const index = Math.round(normalized / 45) % 8;
+    return directions[index];
+  }
+
+  /**
+   * Executa a transição de câmera deslizante ao cruzar o final da ponte
+   */
+  private completeBridgeCrossing(): void {
+    this.isTransitioningMap = true;
+    this.bridgeActive = false;
+
+    // Se completou o Mapa 7 ou atingiu o Nível 15, entra na Arena Fechada do Boss
+    if (this.currentMapIndex >= 6 || this.player.level >= MAX_PLAYER_LEVEL) {
+      this.triggerBossArenaTransition();
+      return;
+    }
+
+    // Desliza a câmera suavemente para frente acompanhando a entrada no novo mapa
+    this.cameras.main.pan(this.player.x, this.player.y - 120, 650, 'Sine.easeInOut', true);
+
+    this.time.delayedCall(650, () => {
+      this.currentMapIndex++;
+      this.mapElapsedSeconds = 0;
+      this.minibossSpawned = false;
+      this.minibossDefeated = false;
+
+      // Atualiza o grid 3x3 infinito para a textura e colisão do novo mapa
+      this.clearStandardEnemies();
+      const nextDef = this.mapManager.switchToMap(this.currentMapIndex);
+
+      // Restaura o follow suave da câmera no jogador
+      this.cameras.main.startFollow(this.player.sprite, true, 0.12, 0.12);
+
+      // Desvanece a ponte antiga suavemente às costas do jogador
+      if (this.bridgeGuideTween) this.bridgeGuideTween.stop();
+      this.tweens.add({
+        targets: this.bridgeContainer,
+        alpha: 0,
+        duration: 500,
+        onComplete: () => {
+          this.bridgeContainer.destroy(true);
+          this.isTransitioningMap = false;
+        },
+      });
+
+      this.showFloatingBanner(
+        `MAPA ${this.currentMapIndex + 1}: ${nextDef.name.toUpperCase()}`,
+        0x00ffcc
+      );
+    });
+  }
+
+  public advanceToNextMap(): void {
+    // Se já completou o Mapa 7 (índice 6) ou atingiu Nível 15, vai para a Arena Final (map5-BOSS)
+    if (this.currentMapIndex >= 6 || this.player.level >= MAX_PLAYER_LEVEL) {
+      this.triggerBossArenaTransition();
+      return;
+    }
+
+    this.cameras.main.fadeOut(500, 0, 0, 0);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.currentMapIndex++;
+      this.mapElapsedSeconds = 0;
+      this.minibossSpawned = false;
+      this.minibossDefeated = false;
+      this.isTransitioningMap = false;
+
+      // Limpa inimigos comuns antigos e carrega a textura/layout do novo mapa infinito
+      this.clearStandardEnemies();
+      const nextDef = this.mapManager.switchToMap(this.currentMapIndex);
+
+      // Posiciona jogador no ponto seguro do novo mapa
+      const spawnPos = this.mapManager.getInitialSpawnPoint();
+      this.player.teleportTo(spawnPos.x, spawnPos.y);
+
+      this.cameras.main.fadeIn(500, 0, 0, 0);
+      this.showFloatingBanner(`MAPA ${this.currentMapIndex + 1}: ${nextDef.name.toUpperCase()}`, 0x00ffcc);
+    });
+  }
+
+  private clearStandardEnemies(): void {
+    this.enemies = this.enemies.filter((enemy) => {
+      if (enemy.isBoss || enemy.isMiniboss) return true;
+      enemy.destroy();
+      return false;
+    });
+    this.updateActiveEnemiesHudCount();
   }
 
   private clearAllActiveEnemiesAndOrbs(): void {
@@ -1679,90 +2066,296 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private onPlayerCompletedMapTransition(newMapName: string): void {
-    this.mapElapsedSeconds = 0;
-    this.minibossSpawned = false;
-    this.minibossDefeated = false;
-    this.currentMiniboss = null;
-    this.minibossKillsInMap = 0;
-    this.compassText.setVisible(false);
+  /**
+   * Verifica se uma coordenada do mapa infinito é válida para um inimigo específico nascer ou caminhar.
+   */
+  private isEnemyPositionBlocked(
+    worldX: number,
+    worldY: number,
+    isFlying: boolean,
+    isWaterType: boolean = false
+  ): boolean {
+    if (this.mapManager.isBossMapActive()) {
+      return this.mapManager.isOutOfArenaBounds(worldX, worldY);
+    }
+    if (isFlying) return false; // Zubat e Golbat voam sobre árvores, casas e água
 
-    const bounds = this.mapManager.getCurrentMapBounds();
-    this.enemies = this.enemies.filter((enemy) => {
-      if (enemy.isDead) return false;
-      if (enemy.isBoss) return true;
-      const insideNewMap =
-        enemy.sprite.x >= bounds.x &&
-        enemy.sprite.x <= bounds.x + bounds.width &&
-        enemy.sprite.y >= bounds.y &&
-        enemy.sprite.y <= bounds.y + bounds.height;
+    const tile = this.mapManager.getCellTypeAt(worldX, worldY);
 
-      if (!insideNewMap) {
-        enemy.destroy();
-        return false;
-      }
+    // Construções e árvores internas bloqueiam terrestres e aquáticos
+    if (tile === 'building' || tile === 'boundary') {
       return true;
-    });
+    }
 
-    this.showBanner(`📍 Você chegou em: ${newMapName}`);
+    // Lagos e rios bloqueiam terrestres (Rattata, Geodude), mas liberam aquáticos (Poliwrath, Lapras)
+    if (tile === 'water') {
+      return !isWaterType;
+    }
+
+    return false;
   }
 
-  private updateCompassIndicator(px: number, py: number): void {
-    const target = this.mapManager.getTransitionTarget(py);
-    const dist = Math.round(
-      Phaser.Math.Distance.Between(px, py, target.x, target.y)
-    );
-    const angle = Math.atan2(target.y - py, target.x - px);
-    const deg = Phaser.Math.RadToDeg(angle);
+  /**
+   * Calcula uma coordenada (x, y) logo fora da visão da câmera (worldView),
+   * priorizando a direção em que o jogador está andando.
+   */
+  private getValidOffscreenSpawnPoint(
+    isFlying: boolean,
+    isWaterType: boolean = false
+  ): Phaser.Math.Vector2 {
+    const cam = this.cameras.main;
+    const view = cam.worldView;
 
-    let arrow = '⬆️';
-    if (deg >= -22.5 && deg < 22.5) arrow = '➡️';
-    else if (deg >= 22.5 && deg < 67.5) arrow = '↘️';
-    else if (deg >= 67.5 && deg < 112.5) arrow = '⬇️';
-    else if (deg >= 112.5 && deg < 157.5) arrow = '↙️';
-    else if (deg >= 157.5 || deg < -157.5) arrow = '⬅️';
-    else if (deg >= -157.5 && deg < -112.5) arrow = '↖️';
-    else if (deg >= -67.5 && deg < -22.5) arrow = '↗️';
+    // Raio diagonal da câmera para garantir que o ponto fique 100% fora da tela
+    const halfW = view.width / 2;
+    const halfH = view.height / 2;
+    const baseRadius = Math.sqrt(halfW * halfW + halfH * halfH);
 
-    this.compassText.setVisible(true);
-    this.compassText.setPosition(px, py - 40);
-    this.compassText.setText(
-      target.passedSeam
-        ? `⬆️ ATRAVESSE A PONTE (${Math.max(1, Math.round(dist / 24))}m)`
-        : `${arrow} PONTE AO NORTE (${Math.max(0, Math.round(dist / 24))}m)`
+    // Direção atual do movimento do jogador (se estiver parado, usa ângulo totalmente aleatório)
+    const velX = this.player.body?.velocity.x || 0;
+    const velY = this.player.body?.velocity.y || 0;
+    const isMoving = Math.abs(velX) > 10 || Math.abs(velY) > 10;
+    const moveAngle = isMoving
+      ? Math.atan2(velY, velX)
+      : Phaser.Math.FloatBetween(0, Math.PI * 2);
+
+    // Tenta até 10 vezes encontrar um ponto fora da tela que não seja parede/água proibida
+    for (let attempt = 0; attempt < 10; attempt++) {
+      let angle: number;
+
+      // 65% de chance de spawnar num arco de 140° à frente do jogador; 35% ao redor (360°)
+      if (isMoving && Math.random() < 0.65) {
+        angle = moveAngle + Phaser.Math.FloatBetween(-1.22, 1.22);
+      } else {
+        angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+      }
+
+      const dist =
+        baseRadius +
+        Phaser.Math.Between(this.SPAWN_MARGIN_MIN, this.SPAWN_MARGIN_MAX);
+      const spawnX = this.player.x + Math.cos(angle) * dist;
+      const spawnY = this.player.y + Math.sin(angle) * dist;
+
+      if (!this.isEnemyPositionBlocked(spawnX, spawnY, isFlying, isWaterType)) {
+        return new Phaser.Math.Vector2(spawnX, spawnY);
+      }
+    }
+
+    // Fallback seguro caso o jogador esteja cercado por obstáculos
+    return new Phaser.Math.Vector2(
+      this.player.x + Phaser.Math.Between(-halfW - 120, halfW + 120),
+      this.player.y - halfH - 120
     );
   }
 
-  private spawnWildPokemon(): void {
-    const bounds = this.mapManager.getCurrentMapBounds();
-    const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-    const distance = Phaser.Math.Between(195, 310);
+  /**
+   * Spawna um inimigo comum da horda respeitando o limite dinâmico e posicionamento fora da tela.
+   */
+  private spawnStandardEnemy(): void {
+    if (this.mapManager.isBossMapActive() || this.isTransitioningMap) return;
 
-    const rawX = Phaser.Math.Clamp(
-      this.player.sprite.x + Math.cos(angle) * distance,
-      bounds.x + 64,
-      bounds.x + bounds.width - 64
-    );
-    const rawY = Phaser.Math.Clamp(
-      this.player.sprite.y + Math.sin(angle) * distance,
-      bounds.y + 64,
-      bounds.y + bounds.height - 64
+    // Escalonamento dinâmico de densidade: aumenta o limite de inimigos conforme o mapa e o tempo
+    const timeMinutes = this.runTimeSeconds / 60;
+    const maxAllowedEnemies = Math.min(
+      130, // Teto máximo absoluto para manter 60 FPS cravados
+      Math.floor(
+        this.BASE_MAX_ENEMIES +
+          this.currentMapIndex * 10 +
+          timeMinutes * 6
+      )
     );
 
-    const spawnPos = this.mapManager.findNearestWalkablePosition(rawX, rawY);
-    const randomEnemyId = Phaser.Utils.Array.GetRandom([...ENEMY_IDS]);
-    const hpScale =
-      1 + this.mapManager.mapsCleared * 0.25 + (this.player.level - 1) * 0.08;
+    const activeCount = this.enemies.filter(
+      (e) => !e.isDead && !e.isBoss && !e.isMiniboss
+    ).length;
+    if (activeCount >= maxAllowedEnemies) {
+      return; // Já atingiu a densidade máxima da horda neste momento
+    }
+
+    // Sorteia o tipo de inimigo comum (Rattata '0019', Zubat '0041')
+    const roll = Math.random();
+    const enemyId = roll > 0.45 ? '0041' : '0019';
+    const isFlying = enemyId === '0041';
+    const spawnPos = this.getValidOffscreenSpawnPoint(isFlying, false);
+
+    // Escalonamento de atributos (Vida e Dano sobem por mapa conquistado e tempo de corrida)
+    const scaleFactor = 1 + this.currentMapIndex * 0.35 + timeMinutes * 0.22;
 
     const enemy = new Enemy(
       this,
       spawnPos.x,
       spawnPos.y,
-      randomEnemyId,
-      hpScale
+      enemyId,
+      scaleFactor
     );
     this.enemies.push(enemy);
     this.enemyGroup.add(enemy.sprite);
+  }
+
+  private spawnWildPokemon(): void {
+    if (this.mapManager.isBossMapActive()) {
+      const bounds = this.mapManager.getCurrentMapBounds();
+      const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+      const distance = Phaser.Math.Between(180, 280);
+      let rawX = Phaser.Math.Clamp(
+        this.player.sprite.x + Math.cos(angle) * distance,
+        bounds.x + 64,
+        bounds.x + bounds.width - 64
+      );
+      let rawY = Phaser.Math.Clamp(
+        this.player.sprite.y + Math.sin(angle) * distance,
+        bounds.y + 64,
+        bounds.y + bounds.height - 64
+      );
+      const spawnPos = this.mapManager.findNearestWalkablePosition(rawX, rawY);
+      const randomEnemyId = Phaser.Utils.Array.GetRandom([...ENEMY_IDS]);
+      const hpScale =
+        1 + this.mapManager.mapsCleared * 0.25 + (this.player.level - 1) * 0.08;
+      const enemy = new Enemy(this, spawnPos.x, spawnPos.y, randomEnemyId, hpScale);
+      this.enemies.push(enemy);
+      this.enemyGroup.add(enemy.sprite);
+      return;
+    }
+
+    this.spawnStandardEnemy();
+  }
+
+  /**
+   * Gerencia inimigos e orbes que ficaram muito longe da câmera no mapa infinito.
+   */
+  private cullAndRecycleDistantEnemies(deltaMs: number): void {
+    if (this.mapManager.isBossMapActive() || this.isTransitioningMap) return;
+
+    // Executa a varredura apenas a cada 200ms para máxima performance
+    this.enemyCullTimer += deltaMs;
+    if (this.enemyCullTimer < 200) return;
+    this.enemyCullTimer = 0;
+
+    const px = this.player.x;
+    const py = this.player.y;
+
+    // 1. Verifica todos os inimigos ativos no grupo
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const enemy = this.enemies[i];
+      if (!enemy || enemy.isDead) continue;
+
+      const dist = Phaser.Math.Distance.Between(
+        px,
+        py,
+        enemy.sprite.x,
+        enemy.sprite.y
+      );
+
+      // CASO A: É o Miniboss Alfa do Mapa (Scyther, Magmar, Poliwrath, etc.)
+      if (enemy.isMiniboss) {
+        if (dist > this.MINIBOSS_LEASH_DIST) {
+          const isFlying = enemy.canFly();
+          const isWater = enemy.canSwim();
+          const newPos = this.getValidOffscreenSpawnPoint(isFlying, isWater);
+
+          enemy.reposition(newPos.x, newPos.y);
+        }
+        continue; // NUNCA dá despawn no Miniboss!
+      }
+
+      if (enemy.isBoss) continue;
+
+      // CASO B: Inimigo comum (Rattata, Zubat, Geodude) ficou muito para trás (> 1050px)
+      if (dist > this.RECYCLE_DISTANCE) {
+        // Se a ponte para o próximo mapa já abriu, limpa os inimigos que ficaram para trás
+        // para guiar o jogador até a ponte sem travar o caminho à toa
+        if (this.bridgeActive) {
+          this.despawnEnemyToPool(enemy);
+          continue;
+        }
+
+        // Caso contrário, RECICLA o inimigo colocando-o na frente da câmera!
+        const isFlying = enemy.canFly();
+        const newPos = this.getValidOffscreenSpawnPoint(isFlying, false);
+
+        const timeMinutes = this.runTimeSeconds / 60;
+        const scaleFactor = 1 + this.currentMapIndex * 0.35 + timeMinutes * 0.22;
+        const newMaxHp = Math.round(enemy.getBaseHp() * scaleFactor);
+
+        enemy.repositionAndRestore(newPos.x, newPos.y, newMaxHp);
+      }
+    }
+
+    // 2. Atualiza o contador real de inimigos ativos no HUD Superior Direito
+    this.updateActiveEnemiesHudCount();
+
+    // 3. Otimização de Orbes de XP esquecidos a mais de 1600px no mapa infinito
+    this.consolidateDistantXpOrbs(px, py);
+  }
+
+  /**
+   * Desativa ou remove um inimigo comum com segurança limpando seus gráficos auxiliares
+   */
+  private despawnEnemyToPool(enemy: Enemy): void {
+    enemy.destroy();
+    const idx = this.enemies.indexOf(enemy);
+    if (idx !== -1) {
+      this.enemies.splice(idx, 1);
+    }
+  }
+
+  /**
+   * Evita que centenas de orbes de XP fiquem espalhados a quilômetros de distância
+   */
+  private consolidateDistantXpOrbs(px: number, py: number): void {
+    let accumulatedFarXp = 0;
+
+    this.xpOrbs = this.xpOrbs.filter((orb) => {
+      const dist = Phaser.Math.Distance.Between(px, py, orb.x, orb.y);
+      if (dist > 1600) {
+        accumulatedFarXp += orb.xpAmount;
+        orb.gfx.destroy();
+        return false;
+      }
+      return true;
+    });
+
+    // Se limpou orbes distantes, cria 1 único "Super Orbe" na borda da câmera com todo o XP somado!
+    if (accumulatedFarXp > 0) {
+      const pos = this.getValidOffscreenSpawnPoint(true, false);
+      this.spawnSingleConsolidatedOrb(pos.x, pos.y, accumulatedFarXp);
+    }
+  }
+
+  private spawnSingleConsolidatedOrb(
+    x: number,
+    y: number,
+    xpAmount: number
+  ): void {
+    const orbGfx = this.add
+      .circle(x, y, 9, 0xffd700, 1)
+      .setStrokeStyle(3, 0xffffff, 1)
+      .setDepth(DEPTH.XP_ORB);
+
+    this.tweens.add({
+      targets: orbGfx,
+      scale: 1.3,
+      yoyo: true,
+      repeat: -1,
+      duration: 500,
+    });
+
+    this.xpOrbs.push({
+      gfx: orbGfx,
+      x,
+      y,
+      xpAmount,
+      isGolden: true,
+      ageMs: 0,
+    });
+  }
+
+  private updateActiveEnemiesHudCount(): void {
+    if (this.rightStatsText) {
+      this.rightStatsText.setText(
+        `💀 Abates: ${this.defeatedCount}   👾 Inimigos: ${this.enemies.length}`
+      );
+    }
   }
 
   private setupShortcuts(): void {
@@ -1879,11 +2472,18 @@ export class GameScene extends Phaser.Scene {
 
     kb.on('keydown-M', () => {
       if (
-        !this.mapManager.isNextMapGateOpen() &&
         !this.mapManager.isBossMapActive() &&
-        !this.isModalOpen
+        !this.isModalOpen &&
+        !this.isTransitioningMap
       ) {
-        this.openNextMapPassage();
+        if (!this.bridgeActive) {
+          const bridgeCenterX = this.player.x;
+          const bridgeSouthEntranceY = this.player.y - 420;
+          this.spawnIntermapBridge(bridgeCenterX, bridgeSouthEntranceY);
+          this.showFloatingBanner('🌉 PONTE CRIADA MANUALMENTE [DEBUG M]', 0x00ffcc);
+        } else {
+          this.completeBridgeCrossing();
+        }
       }
     });
 
@@ -2688,7 +3288,7 @@ export class GameScene extends Phaser.Scene {
     this.xpBarFill.width = 282 * xpRatio;
     this.xpLabelText.setText(
       this.player.level >= MAX_PLAYER_LEVEL
-        ? `${pokeDef.name}  •  NÍVEL MÁXIMO (ARENA BOSS)`
+        ? `${pokeDef.name}  •  NÍVEL MÁXIMO (${MAX_PLAYER_LEVEL})`
         : `${pokeDef.name}  •  XP ${this.player.xp} / ${this.player.xpToNextLevel}`
     );
 
@@ -2700,15 +3300,20 @@ export class GameScene extends Phaser.Scene {
     if (this.mapManager.isBossMapActive()) {
       this.mapSubStatusText.setText('👑 ARENA FINAL • DERROTE OS CHEFES');
       this.mapSubStatusText.setColor('#facc15');
+    } else if (this.isTransitioningMap) {
+      this.mapSubStatusText.setText('✨ AVANÇANDO PARA O PRÓXIMO MAPA...');
+      this.mapSubStatusText.setColor('#34d399');
+    } else if (this.bridgeActive) {
+      // Substatus é gerido pelo updateBridgeAndCompass() com distância e seta direcional
     } else if (this.currentMiniboss && !this.currentMiniboss.isDead) {
       this.mapSubStatusText.setText('⚠️ ALERTA: DERROTE O MINIBOSS!');
       this.mapSubStatusText.setColor('#fb7185');
-    } else if (this.minibossDefeated && this.mapManager.isNextMapGateOpen()) {
-      this.mapSubStatusText.setText('🌉 PONTE DESBLOQUEADA AO NORTE!');
-      this.mapSubStatusText.setColor('#34d399');
     } else {
       const cleanName = mapDef.name.replace(/Mapa \d+ - /, '');
-      this.mapSubStatusText.setText(`🗺️ ${cleanName} • Guardião à espreita`);
+      const remaining = Math.max(0, Math.ceil(this.MINIBOSS_SPAWN_TIME - this.mapElapsedSeconds));
+      const mins = Math.floor(remaining / 60).toString().padStart(2, '0');
+      const secs = (remaining % 60).toString().padStart(2, '0');
+      this.mapSubStatusText.setText(`🗺️ ${cleanName} • Alfa em ${mins}:${secs}`);
       this.mapSubStatusText.setColor('#94a3b8');
     }
 
@@ -2783,11 +3388,17 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
-  private showBanner(message: string): void {
+  public showFloatingBanner(message: string, customColor?: number): void {
+    this.showBanner(message, customColor);
+  }
+
+  private showBanner(message: string, customColor?: number): void {
     let borderColor = 0x38bdf8;
     let textColor = '#f0f9ff';
 
-    if (message.includes('⚠️') || message.includes('MINIBOSS')) {
+    if (customColor !== undefined) {
+      borderColor = customColor;
+    } else if (message.includes('⚠️') || message.includes('MINIBOSS')) {
       borderColor = 0xf43f5e;
       textColor = '#ffe4e6';
     } else if (
