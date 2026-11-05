@@ -46,22 +46,39 @@ export class Enemy {
   private onixChargeAngle = 0;
   private onixWarningGfx: Phaser.GameObjects.Rectangle | null = null;
 
+  public moveSpeed: number = 0;
+  public damage: number = 0;
+  public damageReductionRatio: number = 0;
+  public bossSkillIntervalMs: number = 0;
+  public bossMoveSpeed: number = 0;
+  public bossChargeSpeed: number = 0;
+  public lastSafeX: number = 0;
+  public lastSafeY: number = 0;
+
   constructor(
     scene: Phaser.Scene,
     x: number,
     y: number,
     pokemonId: string,
     hpMultiplier = 1,
-    isMiniboss = false
+    isMiniboss = false,
+    speedOverride = 0,
+    damageOverride = 0,
+    forceNonBoss = false
   ) {
     this.scene = scene;
     this.pokemonDef = POKEMON_MANIFEST[pokemonId];
-    this.isBoss = this.pokemonDef.role === "boss";
+    this.isBoss = forceNonBoss ? false : this.pokemonDef.role === "boss";
     this.isMiniboss = isMiniboss;
+    const baseHp = (forceNonBoss && pokemonId === '0074') ? 52 : this.pokemonDef.baseHp;
     this.maxHp = Math.round(
-      this.pokemonDef.baseHp * hpMultiplier * (isMiniboss ? 3.6 : 1)
+      baseHp * hpMultiplier * (isMiniboss ? 3.6 : 1)
     );
     this.hp = this.maxHp;
+    this.moveSpeed = speedOverride > 0 ? speedOverride : this.pokemonDef.speed;
+    this.damage = damageOverride > 0 ? damageOverride : (this.isBoss ? 22 : isMiniboss ? 14 : 8);
+    this.lastSafeX = x;
+    this.lastSafeY = y;
 
     this.shadow = scene.add
       .ellipse(
@@ -170,7 +187,14 @@ export class Enemy {
     onEnemyDeath?: () => void,
     onBossHazardHitPlayer?: (damage: number) => void,
     onBossChargeStarted?: (startX: number, startY: number) => void,
-    onBossChargeStep?: (currX: number, currY: number) => void
+    onBossChargeStep?: (currX: number, currY: number) => void,
+    isFootprintBlocked?: (
+      x: number,
+      y: number,
+      radius: number,
+      canFly: boolean,
+      canSwim: boolean
+    ) => boolean
   ): void {
     if (this.isDead) return;
 
@@ -262,7 +286,12 @@ export class Enemy {
     // Ataques periódicos de Chefes (Geodude e Onix) e Minibosses
     if (this.isBoss && !this.isIncapacitated()) {
       this.bossSkillTimerMs += delta;
-      const interval = this.pokemonDef.id === "0074" ? 2400 : 2900;
+      const interval =
+        this.bossSkillIntervalMs > 0
+          ? this.bossSkillIntervalMs
+          : this.pokemonDef.id === "0074"
+          ? 2400
+          : 2900;
       if (this.bossSkillTimerMs >= interval) {
         this.bossSkillTimerMs = 0;
         if (this.pokemonDef.id === "0074") {
@@ -297,9 +326,10 @@ export class Enemy {
         const dy = targetY - this.sprite.y;
         const dist = Math.hypot(dx, dy);
 
+        const speed = this.bossMoveSpeed > 0 ? this.bossMoveSpeed : 115;
         if (dist > 30) {
-          const vx = (dx / dist) * 115 * this.slowFactor;
-          const vy = (dy / dist) * 115 * this.slowFactor;
+          const vx = (dx / dist) * speed * this.slowFactor;
+          const vy = (dy / dist) * speed * this.slowFactor;
           this.sprite.setVelocity(vx, vy);
           this.currentDir = PokemonAnimationManager.vectorToDirection(
             vx,
@@ -372,8 +402,9 @@ export class Enemy {
         }
       } else if (this.onixPhase === 'charge') {
         this.isCharging = true;
-        const vx = Math.cos(this.onixChargeAngle) * 620;
-        const vy = Math.sin(this.onixChargeAngle) * 620;
+        const cSpeed = this.bossChargeSpeed > 0 ? this.bossChargeSpeed : 620;
+        const vx = Math.cos(this.onixChargeAngle) * cSpeed;
+        const vy = Math.sin(this.onixChargeAngle) * cSpeed;
         this.sprite.setVelocity(vx, vy);
         this.currentState = 'Attack';
         this.playAnim(false);
@@ -403,7 +434,7 @@ export class Enemy {
       return;
     }
 
-    // Inimigos comuns
+    // Inimigos comuns e Minibosses
     const dx = targetX - this.sprite.x;
     const dy = targetY - this.sprite.y;
     const dist = Math.hypot(dx, dy);
@@ -411,10 +442,70 @@ export class Enemy {
     if (this.isIncapacitated()) {
       this.sprite.setVelocity(0, 0);
     } else if (dist > 18) {
-      const effectiveSpeed = this.pokemonDef.speed * this.slowFactor;
-      const vx = (dx / dist) * effectiveSpeed;
-      const vy = (dy / dist) * effectiveSpeed;
-      this.sprite.setVelocity(vx, vy);
+      const baseSpeed = this.moveSpeed > 0 ? this.moveSpeed : this.pokemonDef.speed;
+      const effectiveSpeed = baseSpeed * this.slowFactor;
+      const isFlying = this.canFly();
+      const isWater = this.canSwim();
+      const hitRadius = this.isMiniboss ? 20 : 13;
+      const dt = delta / 1000;
+
+      let vx = (dx / dist) * effectiveSpeed;
+      let vy = (dy / dist) * effectiveSpeed;
+
+      // 1. Voadores movem-se livremente sobre qualquer obstáculo
+      if (isFlying || !isFootprintBlocked) {
+        this.sprite.setVelocity(vx, vy);
+        this.lastSafeX = this.sprite.x;
+        this.lastSafeY = this.sprite.y;
+      } else {
+        // 2. Não-voadores testam avanço futuro antes de permitir o movimento
+        const stepX = this.sprite.x + vx * dt * 1.5;
+        const stepY = this.sprite.y + vy * dt * 1.5;
+
+        if (!isFootprintBlocked(stepX, stepY, hitRadius, false, isWater)) {
+          this.sprite.setVelocity(vx, vy);
+          this.lastSafeX = this.sprite.x;
+          this.lastSafeY = this.sprite.y;
+        } else {
+          // 3. Bateu em obstáculo/água: tenta deslizar suavemente no eixo X ou Y
+          const canSlideX = !isFootprintBlocked(stepX, this.sprite.y, hitRadius, false, isWater);
+          const canSlideY = !isFootprintBlocked(this.sprite.x, stepY, hitRadius, false, isWater);
+
+          if (canSlideX && !canSlideY) {
+            vx = vx >= 0 ? effectiveSpeed : -effectiveSpeed;
+            vy = 0;
+            this.sprite.setVelocity(vx, vy);
+          } else if (!canSlideX && canSlideY) {
+            vx = 0;
+            vy = vy >= 0 ? effectiveSpeed : -effectiveSpeed;
+            this.sprite.setVelocity(vx, vy);
+          } else {
+            // 4. Quina fechada: testa ângulos de desvio (+65° ou -65°) para contornar
+            const angleToPlayer = Math.atan2(dy, dx);
+            const leftAngle = angleToPlayer - 1.15;
+            const rightAngle = angleToPlayer + 1.15;
+
+            const testLeftX = this.sprite.x + Math.cos(leftAngle) * hitRadius;
+            const testLeftY = this.sprite.y + Math.sin(leftAngle) * hitRadius;
+
+            if (!isFootprintBlocked(testLeftX, testLeftY, hitRadius, false, isWater)) {
+              vx = Math.cos(leftAngle) * effectiveSpeed;
+              vy = Math.sin(leftAngle) * effectiveSpeed;
+              this.sprite.setVelocity(vx, vy);
+            } else {
+              vx = Math.cos(rightAngle) * effectiveSpeed;
+              vy = Math.sin(rightAngle) * effectiveSpeed;
+              this.sprite.setVelocity(vx, vy);
+            }
+          }
+
+          // 5. Trava física rígida (Hard Clamp): se entrou no obstáculo, ejeta para última posição segura
+          if (isFootprintBlocked(this.sprite.x, this.sprite.y, hitRadius, false, isWater)) {
+            this.sprite.setPosition(this.lastSafeX, this.lastSafeY);
+            this.sprite.body.reset(this.lastSafeX, this.lastSafeY);
+          }
+        }
+      }
 
       this.currentDir = PokemonAnimationManager.vectorToDirection(
         vx,
@@ -823,8 +914,19 @@ export class Enemy {
   ): boolean {
     if (this.isDead) return false;
 
-    this.hp = Math.max(0, this.hp - amount);
-    this.showFloatingDamage(Math.round(amount), isCrit);
+    let finalDamage = amount;
+    if (this.isBoss) {
+      if (this.damageReductionRatio > 0) {
+        finalDamage *= (1 - this.damageReductionRatio);
+      }
+      // Limite anti-burst: nenhum golpe único tira mais que 6% da vida máxima do Boss de uma vez
+      const maxSingleHitCap = this.maxHp * 0.06;
+      finalDamage = Math.min(finalDamage, maxSingleHitCap);
+    }
+    finalDamage = Math.max(1, Math.round(finalDamage));
+
+    this.hp = Math.max(0, this.hp - finalDamage);
+    this.showFloatingDamage(finalDamage, isCrit);
 
     this.sprite.setTintFill(isCrit ? 0xffcb05 : 0xffffff);
     this.scene.time.delayedCall(90, () => {

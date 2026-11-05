@@ -5,6 +5,10 @@ import {
   MapDefinition,
 } from '../config/pokemonManifest';
 import { DEPTH } from './depth';
+import {
+  buildVariantBodyblockGrid,
+  TileCollisionType,
+} from '../config/variantMapLayouts';
 import { MAP_LAYOUTS, NormalizedBox } from '../config/mapLayouts';
 
 export type MapCellType = 'walkable' | 'water' | 'building' | 'boundary';
@@ -38,13 +42,14 @@ export class MapManager {
 
   // Pool de 9 imagens (Grid 3x3) para cobrir a visão da câmera infinitamente
   private mapChunks: Phaser.GameObjects.Image[] = [];
-  private chunkWidth = 2048;
-  private chunkHeight = 2048;
+  private chunkWidth = 1280;
+  private chunkHeight = 1280;
 
   private currentMap!: ActiveMapInstance;
   private currentMapIndex = 0;
   private bossArenaActive = false;
 
+  private currentVariantGrid: TileCollisionType[][] = [];
   private debugGraphics!: Phaser.GameObjects.Graphics;
   private isDebugVisible = false;
   public mapsCleared = 0;
@@ -58,6 +63,14 @@ export class MapManager {
       scene.load.image(mapDef.key, mapDef.file);
     }
     scene.load.image(BOSS_MAP_DEFINITION.key, BOSS_MAP_DEFINITION.file);
+
+    // 6 Novos Mapas Modulares (Sem bordas de árvores fechadas)
+    scene.load.image('map1_var', 'assets/maps/map1_var.jpeg');
+    scene.load.image('map2_var', 'assets/maps/map2_var.jpeg');
+    scene.load.image('map3_var', 'assets/maps/map3_var.jpeg');
+    scene.load.image('map4_var', 'assets/maps/map4_var.jpeg');
+    scene.load.image('map5_var', 'assets/maps/map5_var.jpeg');
+    scene.load.image('map6_var', 'assets/maps/map6_var.jpeg');
 
     // Sprites de cenário e terreno para suavizar emendas e decorar passagens
     scene.load.image('tex_gramas', 'assets/spritesguias/gramas.jpeg');
@@ -193,7 +206,27 @@ export class MapManager {
     this.mapsCleared = this.currentMapIndex;
     const def = MAP_SEQUENCE[this.currentMapIndex];
 
-    const seamlessKey = this.getOrCreateBorderlessMapTexture(this.currentMapIndex);
+    // Chaves dos 6 novos mapas modulares (Mapa 6 e 7 compartilham o estilo de Caverna/Ruínas)
+    const newMapKeys = [
+      'map1_var',
+      'map2_var',
+      'map3_var',
+      'map4_var',
+      'map5_var',
+      'map6_var',
+      'map6_var',
+    ];
+
+    const idx = Phaser.Math.Clamp(this.currentMapIndex, 0, 6);
+    const hasVariant = this.scene.textures.exists(newMapKeys[idx]);
+    const chosenKey = hasVariant ? newMapKeys[idx] : this.getOrCreateBorderlessMapTexture(this.currentMapIndex);
+
+    // Carrega a matriz 32x32 de Bodyblock exata para o mapa atual
+    this.currentVariantGrid = buildVariantBodyblockGrid(idx);
+
+    // Dimensões do chunk padronizadas para os novos mapas modulares
+    this.chunkWidth = 1280;
+    this.chunkHeight = 1280;
 
     // Limpa mapa anterior se houver
     if (this.currentMap && this.currentMap.image) {
@@ -201,29 +234,30 @@ export class MapManager {
     }
     this.clearInfiniteObstacles();
 
-    // Cria a instância base com dados de colisão extraídos da imagem JPEG e mapLayouts.json
+    // Cria a instância base com dados de colisão
     this.currentMap = this.createMapInstance(def, this.currentMapIndex, 0, 0, false, false);
     this.currentMap.image.setVisible(false);
 
-    // Remove as colisões de árvores da moldura externa na grade
-    this.stripOuterBorderCollisions(this.currentMapIndex);
+    if (!hasVariant) {
+      this.stripOuterBorderCollisions(this.currentMapIndex);
+    }
 
     // Cria os 9 quadrantes (Grid 3x3) SEM NUNCA ESPELHAR!
     if (this.mapChunks.length === 0) {
       for (let i = 0; i < 9; i++) {
         const img = this.scene.add
-          .image(0, 0, seamlessKey)
+          .image(0, 0, chosenKey)
           .setOrigin(0, 0)
-          .setScale(def.worldScale)
+          .setDisplaySize(this.chunkWidth, this.chunkHeight)
           .setDepth(DEPTH.MAP)
-          .setFlip(false, false); // NUNCA espelha para manter a orientação original 100%!
+          .setFlip(false, false); // Mantém orientação original 100%!
         this.mapChunks.push(img);
       }
     } else {
       for (const chunk of this.mapChunks) {
-        chunk.setTexture(seamlessKey);
-        chunk.setScale(def.worldScale);
-        chunk.setFlip(false, false); // Garante orientação original 100% do tempo
+        chunk.setTexture(chosenKey);
+        chunk.setDisplaySize(this.chunkWidth, this.chunkHeight);
+        chunk.setFlip(false, false);
         chunk.setVisible(true);
       }
     }
@@ -255,6 +289,10 @@ export class MapManager {
         chunk.setPosition(cx * this.chunkWidth, cy * this.chunkHeight);
         chunk.setFlip(false, false); // Mantém todos os lados na direção correta
       }
+    }
+
+    if (this.isDebugVisible) {
+      this.renderDebugGrid(playerX, playerY);
     }
   }
 
@@ -295,20 +333,32 @@ export class MapManager {
       return 'boundary';
     }
 
+    // Se temos a matriz 32x32 de Bodyblock dos novos mapas modulares
+    if (this.currentVariantGrid && this.currentVariantGrid.length > 0) {
+      const rows = this.currentVariantGrid.length;
+      const cols = this.currentVariantGrid[0].length;
+
+      // Converte coordenada global infinita (positiva ou negativa) para 0.0 .. 1.0 dentro do chunk
+      const localU = (((worldX % this.chunkWidth) + this.chunkWidth) % this.chunkWidth) / this.chunkWidth;
+      const localV = (((worldY % this.chunkHeight) + this.chunkHeight) % this.chunkHeight) / this.chunkHeight;
+
+      const col = Phaser.Math.Clamp(Math.floor(localU * cols), 0, cols - 1);
+      const row = Phaser.Math.Clamp(Math.floor(localV * rows), 0, rows - 1);
+
+      const val = this.currentVariantGrid[row][col];
+      if (val === 1) return 'building'; // Sólido / Bodyblock (Casas, cercas, árvores, falésias)
+      if (val === 2) return 'water';    // Água (Lagos, mar, poças)
+      return 'walkable';                // Livre
+    }
+
     const m = this.currentMap;
     if (!m) return 'walkable';
 
-    // Coordenada normalizada (0.0 a 1.0) sempre na orientação original (sem espelhar!)
     const localU = (((worldX % this.chunkWidth) + this.chunkWidth) % this.chunkWidth) / this.chunkWidth;
     const localV = (((worldY % this.chunkHeight) + this.chunkHeight) % this.chunkHeight) / this.chunkHeight;
 
-    // Mapeia para a área interna do grid (compensando a moldura de árvores recortada)
-    const trimRatio = (this.currentMapIndex <= 2) ? this.BORDER_TRIM_RATIO : 0.055;
-    const mappedU = trimRatio + localU * (1 - trimRatio * 2);
-    const mappedV = trimRatio + localV * (1 - trimRatio * 2);
-
-    const col = Phaser.Math.Clamp(Math.floor(mappedU * m.cols), 0, m.cols - 1);
-    const row = Phaser.Math.Clamp(Math.floor(mappedV * m.rows), 0, m.rows - 1);
+    const col = Phaser.Math.Clamp(Math.floor(localU * m.cols), 0, m.cols - 1);
+    const row = Phaser.Math.Clamp(Math.floor(localV * m.rows), 0, m.rows - 1);
 
     return m.cellTypeGrid?.[row]?.[col] ?? 'walkable';
   }
@@ -373,6 +423,14 @@ export class MapManager {
   getCurrentMapBounds(): { x: number; y: number; width: number; height: number } {
     const m = this.currentMap;
     return { x: m.x, y: m.y, width: m.width, height: m.height };
+  }
+
+  getChunkWidth(): number {
+    return this.chunkWidth;
+  }
+
+  getChunkHeight(): number {
+    return this.chunkHeight;
   }
 
   isBossMapActive(): boolean {
@@ -457,9 +515,9 @@ export class MapManager {
 
   // ===================== DEBUG / SPAWN SEGURO =====================
 
-  toggleDebug(): boolean {
+  toggleDebug(playerX?: number, playerY?: number): boolean {
     this.isDebugVisible = !this.isDebugVisible;
-    this.renderDebugGrid();
+    this.renderDebugGrid(playerX, playerY);
     return this.isDebugVisible;
   }
 
@@ -885,9 +943,60 @@ export class MapManager {
     this.obstacleGroup.refresh();
   }
 
-  private renderDebugGrid(): void {
+  public renderDebugGrid(playerX?: number, playerY?: number): void {
     this.debugGraphics.clear();
-    if (!this.isDebugVisible) return;
+    if (!this.isDebugVisible || this.bossArenaActive) return;
+
+    if (this.currentVariantGrid && this.currentVariantGrid.length > 0) {
+      const rows = 32;
+      const cols = 32;
+      const cellW = this.chunkWidth / cols;
+      const cellH = this.chunkHeight / rows;
+
+      const px =
+        playerX ??
+        this.scene.cameras.main.scrollX + this.scene.cameras.main.width / 2;
+      const py =
+        playerY ??
+        this.scene.cameras.main.scrollY + this.scene.cameras.main.height / 2;
+
+      const centerChunkX = Math.floor(px / this.chunkWidth);
+      const centerChunkY = Math.floor(py / this.chunkHeight);
+
+      // Desenha nos 9 quadrantes visíveis ao redor do jogador
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const startX = (centerChunkX + dx) * this.chunkWidth;
+          const startY = (centerChunkY + dy) * this.chunkHeight;
+
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              const val = this.currentVariantGrid[r][c];
+              if (val === 1) {
+                // Vermelho = Bodyblock Sólido (Casas, Árvores, Falésias, Ruínas)
+                this.debugGraphics.fillStyle(0xff0000, 0.35);
+                this.debugGraphics.fillRect(
+                  startX + c * cellW,
+                  startY + r * cellH,
+                  cellW,
+                  cellH
+                );
+              } else if (val === 2) {
+                // Azul = Zona Aquática (Squirtle/Wartortle/Blastoise nadam; terrestres bloqueiam)
+                this.debugGraphics.fillStyle(0x0088ff, 0.35);
+                this.debugGraphics.fillRect(
+                  startX + c * cellW,
+                  startY + r * cellH,
+                  cellW,
+                  cellH
+                );
+              }
+            }
+          }
+        }
+      }
+      return;
+    }
 
     const m = this.currentMap;
     if (!m) return;

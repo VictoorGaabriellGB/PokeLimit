@@ -138,6 +138,7 @@ export class Player {
   private attackAnimSafetyMs = 0;
 
   public level = 1;
+  public evolutionStage = 0;
   public xp = 0;
   public xpToNextLevel = getRequiredXpForLevel(1);
 
@@ -368,6 +369,10 @@ export class Player {
     return this.abilityLevels.get(id) ?? 0;
   }
 
+  getEvolutionStage(): number {
+    return this.evolutionStage;
+  }
+
   getAbilityLevels(): Map<AbilityId, number> {
     return this.abilityLevels;
   }
@@ -585,6 +590,7 @@ export class Player {
   }
 
   private evolveTo(nextDef: PokemonDefinition): void {
+    this.evolutionStage++;
     this.pokemonDef = nextDef;
     this.isAttacking = false;
     this.maxHp = this.computeMaxHp();
